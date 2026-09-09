@@ -6,6 +6,10 @@ A full-featured controller for a **64×32 RGB LED matrix** driven by a Raspberry
 
 ---
 
+<img width="624" height="468" alt="spotiup" src="https://raw.githubusercontent.com/dayeggpi/pi-dashboard/refs/heads/main/pictures-videos/03.png" />
+
+---
+
 ## Requirements
 
 - Raspberry PI (4B preferred, zero 2W ok with some lags)
