@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LED Matrix Control</title>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-<link rel="stylesheet" href="/static/style.css?v=20260713-workout">
+<link rel="stylesheet" href="/static/style.css?v=20260729-monitoring">
 </head>
 <body>
 <div class="container">
@@ -15,6 +15,7 @@
       <div class="header-actions">
         <button id="btn-screen" class="icon-btn" onclick="toggleScreen()" title="Toggle screen">&#9211;</button>
         <button id="btn-night" class="icon-btn" onclick="toggleNightMode()" title="Toggle night mode">&#9790;</button>
+        <button id="btn-dnd" class="icon-btn" onclick="toggleDnd()" title="Do Not Disturb — ON AIR">DND</button>
       </div>
     </div>
     <div class="status-bar">
@@ -29,12 +30,19 @@
     <button class="tab-btn" id="tab-btn-reminders" onclick="showTab('reminders')">Reminders</button>
     <button class="tab-btn" id="tab-btn-library" onclick="showTab('library')">Library</button>
     <button class="tab-btn" id="tab-btn-weather" onclick="showTab('weather')">Weather</button>
+    <button class="tab-btn" id="tab-btn-github" onclick="showTab('github')">GitHub</button>
+    <button class="tab-btn" id="tab-btn-wheel" onclick="showTab('wheel')">Wheel</button>
+    <button class="tab-btn" id="tab-btn-monitoring" onclick="showTab('monitoring')">Monitoring</button>
   </nav>
 
   <div class="tab-panel active" id="tab-main">
   <!-- Mode selector -->
   <section class="card">
     <h2>Mode</h2>
+    <div class="nav-mode-bar">
+      <label><input type="checkbox" id="nav-mode-toggle"> Navigate without displaying</label>
+      <button id="btn-display-mode" onclick="displayCurrentPanel()" style="display:none">Display on matrix</button>
+    </div>
     <div class="mode-buttons" id="mode-buttons"></div>
   </section>
 
@@ -205,6 +213,12 @@
       <input type="text" id="lib-draw-name" placeholder="Name (optional)">
       <button onclick="addDrawToLibrary()">Save to Library</button>
     </div>
+    <div class="img-divider"></div>
+    <p class="hint">Load from library:</p>
+    <div class="lib-add-row">
+      <select id="draw-lib-select"><option value="">— select item —</option></select>
+      <button onclick="loadLibraryToDraw()">Load</button>
+    </div>
   </section>
 
   <!-- Pomodoro -->
@@ -328,6 +342,35 @@
     </div>
   </section>
 
+  <!-- Decision Wheel -->
+  <section class="card" id="panel-wheel">
+    <h2>Decision Wheel</h2>
+    <p class="hint">Spinning! Manage choices in the <button class="link-btn" onclick="showTab('wheel')">Wheel tab</button>.</p>
+    <div class="row gap">
+      <button onclick="spinWheel()">Spin!</button>
+      <span id="wheel-result-inline" class="muted" style="align-self:center"></span>
+    </div>
+  </section>
+
+  <!-- Monitoring -->
+  <section class="card" id="panel-monitoring">
+    <h2>Monitoring</h2>
+    <p class="hint">Ping endpoints and track uptime. Manage in the <button class="link-btn" onclick="showTab('monitoring')">Monitoring tab</button>.</p>
+    <div class="row gap">
+      <button onclick="showTab('monitoring')">Open Monitoring</button>
+      <button onclick="setMode('monitoring')">Display on Matrix</button>
+    </div>
+  </section>
+
+  <!-- GitHub -->
+  <section class="card" id="panel-github">
+    <h2>GitHub</h2>
+    <p class="hint">Manage username and settings in the <button class="link-btn" onclick="showTab('github')">GitHub tab</button>.</p>
+    <div class="row gap">
+      <button onclick="showTab('github')">Open GitHub Settings</button>
+    </div>
+  </section>
+
   <!-- Library -->
   <section class="card" id="panel-library">
     <h2>Library</h2>
@@ -352,6 +395,12 @@
       </div>
       <div class="img-divider"></div>
     </div>
+    <p class="hint">Load from library:</p>
+    <div class="lib-add-row">
+      <select id="img-lib-select"><option value="">— select item —</option></select>
+      <button onclick="loadLibraryToImage()">Load</button>
+    </div>
+    <div class="img-divider"></div>
     <label>
       Upload new image
       <input type="file" id="img-file" accept="image/*" onchange="onImageSelected(event)">
@@ -486,9 +535,80 @@
     </section>
   </div>
 
+  <div class="tab-panel" id="tab-github">
+    <section class="card">
+      <h2>GitHub Contributions</h2>
+      <p class="hint">Displays the public contribution grid for any GitHub username. No API key required.</p>
+      <label>GitHub username
+        <input type="text" id="gh-username" placeholder="e.g. torvalds">
+      </label>
+      <label>Contribution color
+        <input type="color" id="gh-color" value="#00ff00">
+      </label>
+      <label>Refresh interval (seconds)
+        <input type="number" id="gh-refresh" min="300" max="86400" value="3600">
+      </label>
+      <div class="row gap" style="margin-top:12px">
+        <button onclick="saveGithubSettings()">Save Settings</button>
+        <button onclick="setMode('github')">Display GitHub</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="tab-panel" id="tab-monitoring">
+    <section class="card">
+      <h2>Endpoints</h2>
+      <p class="hint">Add URLs, IPs, or domains to ping. Down endpoints float to the top on the matrix.</p>
+      <div class="mon-list" id="mon-list"></div>
+      <div class="mon-add-row">
+        <input type="text" id="mon-new-name" placeholder="Shortname">
+        <input type="text" id="mon-new-url" placeholder="URL / IP / domain">
+        <input type="number" id="mon-new-interval" min="1" max="1440" value="5" title="Ping every N minutes">
+        <span style="align-self:center;color:var(--muted);font-size:12px">min</span>
+        <button onclick="addMonitoringEndpoint()">Add</button>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Display</h2>
+      <label>Scroll speed (px/s)
+        <div class="row">
+          <input type="range" id="mon-speed" min="0" max="80" value="20">
+          <span id="mon-speed-val">20</span>
+        </div>
+      </label>
+      <div class="row gap" style="margin-top:12px">
+        <button onclick="saveMonitoringSettings()">Save Settings</button>
+        <button onclick="setMode('monitoring')">Display on Matrix</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="tab-panel" id="tab-wheel">
+    <section class="card">
+      <h2>Decision Wheel</h2>
+      <p class="hint">Add choices below. Hit <strong>Spin!</strong> to pick a random one and watch the animation on the matrix.</p>
+      <div id="wheel-choices-list" style="margin-bottom:10px"></div>
+      <div class="row gap">
+        <input type="text" id="wheel-new-choice" placeholder="New choice…" style="flex:1">
+        <button onclick="addWheelChoice()">Add</button>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Spin</h2>
+      <div class="row gap">
+        <button onclick="spinWheel()" style="flex:1">Spin!</button>
+        <button onclick="setMode('wheel')">Display Wheel</button>
+      </div>
+      <div id="wheel-result-display" style="margin-top:12px;display:none;padding:10px;background:var(--bg);border-radius:6px;text-align:center">
+        <span style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px">Result</span><br>
+        <strong id="wheel-result-text" style="font-size:18px;color:var(--text)"></strong>
+      </div>
+    </section>
+  </div>
+
 </div>
 
 <div id="toast"></div>
-<script src="/static/app.js?v=20260713-workout"></script>
+<script src="/static/app.js?v=20260729-monitoring"></script>
 </body>
 </html>

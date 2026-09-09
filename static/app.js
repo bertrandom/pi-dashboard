@@ -3,6 +3,10 @@
 let _toastTimer = null;
 let _screenOn = true;
 let _nightModeEnabled = false;
+let _dndEnabled = false;
+let _navMode = localStorage.getItem('led_nav_mode') === 'true';
+let _currentPanel = null;
+let _matrixMode = null;
 let drawTool = 'pen';
 let drawPixels = new Map();
 let drawMouseDown = false;
@@ -25,7 +29,9 @@ async function api(path, method = 'GET', body = null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(path, opts);
-  return r.json();
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok && !data.error) data.error = `Request failed (${r.status})`;
+  return data;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,7 +67,7 @@ function showTab(name) {
 }
 
 function foregroundModes(modes) {
-  return modes.filter(name => name !== 'reminder');
+  return modes.filter(name => !['reminder', 'onair'].includes(name));
 }
 
 function carouselModes(modes) {
@@ -79,8 +85,10 @@ async function init() {
 
   _screenOn = data.screen_on !== false;
   _nightModeEnabled = !!(data.config?.night_mode?.enabled);
+  _dndEnabled = !!data.dnd;
   updateScreenBtn();
   updateNightBtn();
+  updateDndBtn();
 
   const br = document.getElementById('brightness');
   br.value = data.brightness ?? 50;
@@ -90,14 +98,17 @@ async function init() {
   const container = document.getElementById('mode-buttons');
   const modeNames = data.modes || [];
   const displayModeNames = foregroundModes(modeNames);
+  _matrixMode = data.mode;
+  _currentPanel = data.mode;
   displayModeNames.forEach(name => {
     const btn = document.createElement('button');
     btn.className = 'mode-btn' + (name === data.mode ? ' active' : '');
     btn.textContent = name;
     btn.dataset.mode = name;
-    btn.onclick = () => setMode(name);
+    btn.onclick = () => _navMode ? selectPanel(name) : setMode(name);
     container.appendChild(btn);
   });
+  _applyNavMode();
 
   // Populate config panels from saved config
   const cfg = data.config || {};
@@ -215,24 +226,67 @@ async function init() {
     if (conds && conds.conditions) buildWeatherTestGrid(conds.conditions, (wx || {}).test_condition);
   } catch (_) {}
 
+  // GitHub
+  if (cfg.github) {
+    document.getElementById('gh-username').value = cfg.github.username || '';
+    document.getElementById('gh-color').value = rgbToHex(cfg.github.color || [0, 255, 0]);
+    document.getElementById('gh-refresh').value = cfg.github.refresh_interval || 3600;
+  }
+
+  // Decision Wheel
+  _wheelChoices = (cfg.wheel || {}).choices || [];
+  renderWheelChoices();
+
+  // Monitoring
+  try {
+    const mon = await api('/api/config/monitoring');
+    if (mon && !mon.error) await loadMonitoringConfig(mon);
+  } catch (_) {}
+
   showPanelForMode(data.mode);
 }
 
 // ── Mode ──────────────────────────────────────────────────────────────────────
 
+function _updateModeButtons() {
+  document.querySelectorAll('#mode-buttons .mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === _currentPanel);
+    b.classList.toggle('matrix-active', _navMode && b.dataset.mode === _matrixMode && _matrixMode !== _currentPanel);
+  });
+}
+
+function _applyNavMode() {
+  const btn = document.getElementById('btn-display-mode');
+  if (btn) btn.style.display = _navMode ? '' : 'none';
+  const toggle = document.getElementById('nav-mode-toggle');
+  if (toggle) toggle.checked = _navMode;
+  _updateModeButtons();
+}
+
+function selectPanel(name) {
+  _currentPanel = name;
+  _updateModeButtons();
+  showPanelForMode(name);
+}
+
+async function displayCurrentPanel() {
+  if (_currentPanel) await setMode(_currentPanel);
+}
+
 async function setMode(name) {
+  if (_dndEnabled) { toast('Do Not Disturb active — disable DND first', false); return; }
   const data = await api('/api/mode', 'POST', { mode: name });
   if (data.error) { toast(data.error, false); return; }
+  _matrixMode = name;
+  _currentPanel = name;
   document.getElementById('current-mode').textContent = name;
-  document.querySelectorAll('#mode-buttons .mode-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.mode === name);
-  });
+  _updateModeButtons();
   showPanelForMode(name);
   toast(`Mode → ${name}`);
 }
 
 function showPanelForMode(mode) {
-  ['clock', 'text', 'gameoflife', 'spotify', 'patternflow', 'draw', 'pomodoro', 'workout', 'reminder', 'image', 'library', 'weather'].forEach(m => {
+  ['clock', 'text', 'gameoflife', 'spotify', 'patternflow', 'draw', 'pomodoro', 'workout', 'reminder', 'image', 'library', 'weather', 'github', 'wheel', 'monitoring'].forEach(m => {
     const el = document.getElementById(`panel-${m}`);
     if (el) el.style.display = (m === mode) ? '' : 'none';
   });
@@ -583,7 +637,14 @@ document.addEventListener('DOMContentLoaded', () => {
   init();
 });
 
-window.addEventListener('resize', () => setupDrawCanvas());
+let _drawResizeFrame = null;
+window.addEventListener('resize', () => {
+  if (_drawResizeFrame !== null) cancelAnimationFrame(_drawResizeFrame);
+  _drawResizeFrame = requestAnimationFrame(() => {
+    _drawResizeFrame = null;
+    setupDrawCanvas();
+  });
+});
 
 async function setBrightness() {
   const value = parseInt(document.getElementById('brightness').value);
@@ -849,6 +910,7 @@ let _workoutType = 'tabata';
 let _workoutPaused = false;
 let _workoutActive = false;
 let _workoutPollTimer = null;
+let _workoutPollPending = false;
 
 function selectWorkoutType(type) {
   _workoutType = type;
@@ -958,8 +1020,11 @@ function _stopWorkoutPoll() {
 }
 
 async function _pollWorkoutStatus() {
+  if (_workoutPollPending || document.hidden) return;
+  _workoutPollPending = true;
   const data = await api('/api/workout').catch(() => null);
-  if (!data) return;
+  _workoutPollPending = false;
+  if (!data || data.error) return;
   const ph = data.phase || 'idle';
   if (ph === 'idle') { _setWorkoutActive(false); _stopWorkoutPoll(); return; }
 
@@ -1167,6 +1232,34 @@ async function saveNightMode() {
   _nightModeEnabled = payload.enabled;
   updateNightBtn();
   toast(payload.enabled ? 'Night mode enabled' : 'Night mode disabled');
+}
+
+function updateDndBtn() {
+  const btn = document.getElementById('btn-dnd');
+  if (!btn) return;
+  btn.classList.toggle('is-dnd', _dndEnabled);
+  btn.title = _dndEnabled ? 'ON AIR — click to exit Do Not Disturb' : 'Do Not Disturb (ON AIR mode)';
+}
+
+async function toggleDnd() {
+  const data = await api('/api/dnd', 'POST', { enabled: !_dndEnabled });
+  if (data.error) { toast(data.error, false); return; }
+  _dndEnabled = data.enabled;
+  updateDndBtn();
+  if (_dndEnabled) {
+    _matrixMode = 'onair';
+    _currentPanel = 'onair';
+    document.getElementById('current-mode').textContent = 'onair';
+    _updateModeButtons();
+    toast('ON AIR — Do Not Disturb active');
+  } else {
+    _matrixMode = data.mode;
+    _currentPanel = data.mode;
+    document.getElementById('current-mode').textContent = data.mode;
+    _updateModeButtons();
+    showPanelForMode(data.mode);
+    toast('Do Not Disturb off');
+  }
 }
 
 // ── System ────────────────────────────────────────────────────────────────────
@@ -1382,6 +1475,7 @@ function renderLibraryList() {
   const list = document.getElementById('lib-list');
   if (!list) return;
   list.innerHTML = '';
+  _populateLibrarySelects();
   if (!_libraryItems.length) {
     const p = document.createElement('p');
     p.className = 'hint';
@@ -1409,7 +1503,7 @@ function renderLibraryList() {
     row.querySelector('.lib-name-input').value = item.name || '';
     row.querySelector('.lib-duration-input').value = item.duration || 10;
     row.querySelector('.lib-item-source').textContent = item.source || '';
-    row.querySelector('.lib-btn-display').onclick = () => setMode('library');
+    row.querySelector('.lib-btn-display').onclick = () => displayLibraryItem(item.id);
     row.querySelector('.lib-btn-remove').onclick = () => deleteLibraryItem(item.id);
     list.appendChild(row);
   });
@@ -1432,6 +1526,16 @@ async function saveLibraryConfig() {
   _libraryItems = (data.config || {}).items || [];
   renderLibraryList();
   toast('Library settings saved');
+}
+
+async function displayLibraryItem(id) {
+  const data = await api(`/api/library/display/${id}`, 'POST');
+  if (data.error) { toast(data.error, false); return; }
+  _matrixMode = 'library';
+  _currentPanel = 'library';
+  document.getElementById('current-mode').textContent = 'library';
+  _updateModeButtons();
+  showPanelForMode('library');
 }
 
 async function deleteLibraryItem(id) {
@@ -1461,6 +1565,51 @@ async function addDrawToLibrary() {
   _libraryItems = (data.config || {}).items || [];
   renderLibraryList();
   toast(`"${data.item?.name || name}" saved to library`);
+}
+
+function _populateLibrarySelects() {
+  ['img-lib-select', 'draw-lib-select'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— select item —</option>';
+    _libraryItems.forEach(item => {
+      const opt = document.createElement('option');
+      opt.value = item.id;
+      opt.textContent = item.name || item.id;
+      sel.appendChild(opt);
+    });
+    if (prev) sel.value = prev;
+  });
+}
+
+async function loadLibraryToImage() {
+  const id = document.getElementById('img-lib-select').value;
+  if (!id) { toast('Select a library item first', false); return; }
+  const data = await api(`/api/image/load-from-library/${id}`, 'POST');
+  if (data.error) { toast(data.error, false); return; }
+  _matrixMode = 'image';
+  _currentPanel = 'image';
+  document.getElementById('current-mode').textContent = 'image';
+  _updateModeButtons();
+  showPanelForMode('image');
+  refreshImagePanel();
+  toast('Loaded from library');
+}
+
+async function loadLibraryToDraw() {
+  const id = document.getElementById('draw-lib-select').value;
+  if (!id) { toast('Select a library item first', false); return; }
+  const data = await api(`/api/draw/load-from-library/${id}`, 'POST');
+  if (data.error) { toast(data.error, false); return; }
+  loadDrawConfig(data.config || {});
+  renderDrawCanvas();
+  _matrixMode = 'draw';
+  _currentPanel = 'draw';
+  document.getElementById('current-mode').textContent = 'draw';
+  _updateModeButtons();
+  showPanelForMode('draw');
+  toast('Loaded from library');
 }
 
 // ── Settings export / import ──────────────────────────────────────────────────
@@ -1619,10 +1768,10 @@ async function setWeatherTest(condition) {
   document.querySelectorAll('.wx-test-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.cond === condition);
   });
+  _matrixMode = 'weather';
+  _currentPanel = 'weather';
   document.getElementById('current-mode').textContent = 'weather';
-  document.querySelectorAll('#mode-buttons .mode-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.mode === 'weather');
-  });
+  _updateModeButtons();
   showPanelForMode('weather');
   toast(`Test: ${WX_CONDITION_LABELS[condition] || condition}`);
 }
@@ -1635,7 +1784,301 @@ async function clearWeatherTest() {
   toast('Live weather data active');
 }
 
+// ── Decision Wheel ────────────────────────────────────────────────────────────
+
+let _wheelChoices = [];
+
+function renderWheelChoices() {
+  const list = document.getElementById('wheel-choices-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!_wheelChoices.length) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = 'No choices yet. Add some below.';
+    list.appendChild(p);
+    return;
+  }
+  _wheelChoices.forEach((choice, idx) => {
+    const row = document.createElement('div');
+    row.className = 'carousel-row';
+    const label = document.createElement('span');
+    label.textContent = choice;
+    label.style.flex = '1';
+    const btn = document.createElement('button');
+    btn.textContent = '✕';
+    btn.className = 'btn-danger';
+    btn.style.cssText = 'padding:2px 7px;font-size:11px';
+    btn.onclick = () => removeWheelChoice(idx);
+    row.appendChild(label);
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+async function _saveWheelChoices() {
+  const data = await api('/api/config/wheel', 'POST', { choices: _wheelChoices });
+  if (data.error) toast(data.error, false);
+}
+
+function addWheelChoice() {
+  const input = document.getElementById('wheel-new-choice');
+  const val = (input.value || '').trim();
+  if (!val) return;
+  if (_wheelChoices.includes(val)) { toast('Already in list', false); return; }
+  _wheelChoices = [..._wheelChoices, val];
+  input.value = '';
+  renderWheelChoices();
+  _saveWheelChoices();
+  toast(`Added "${val}"`);
+}
+
+function removeWheelChoice(idx) {
+  const removed = _wheelChoices[idx];
+  _wheelChoices = _wheelChoices.filter((_, i) => i !== idx);
+  renderWheelChoices();
+  _saveWheelChoices();
+  toast(`Removed "${removed}"`);
+}
+
+async function spinWheel() {
+  if (!_wheelChoices.length) { toast('Add choices first', false); return; }
+  if (_matrixMode !== 'wheel') await setMode('wheel');
+  const data = await api('/api/wheel/spin', 'POST');
+  if (data.error) { toast(data.error, false); return; }
+  if (data.status === 'no_choices') { toast('No choices configured', false); return; }
+  if (data.status === 'busy') { toast('Already spinning…', false); return; }
+  const result = data.choice || '?';
+  const rd = document.getElementById('wheel-result-display');
+  const rt = document.getElementById('wheel-result-text');
+  const ri = document.getElementById('wheel-result-inline');
+  if (rd) rd.style.display = '';
+  if (rt) rt.textContent = result;
+  if (ri) ri.textContent = `→ ${result}`;
+  toast(`🎯 ${result}`);
+}
+
+// Also allow Enter key to add a wheel choice
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.activeElement && document.activeElement.id === 'wheel-new-choice') {
+    addWheelChoice();
+  }
+  if (e.key === 'Enter' && document.activeElement && ['mon-new-name', 'mon-new-url', 'mon-new-interval'].includes(document.activeElement.id)) {
+    addMonitoringEndpoint();
+  }
+});
+
+// ── Monitoring ────────────────────────────────────────────────────────────────
+
+let _monEndpoints = [];
+let _monStatus = {};
+
+async function loadMonitoringConfig(cfg) {
+  _monEndpoints = (cfg || {}).endpoints || [];
+  const speed = (cfg || {}).scroll_speed ?? 20;
+  const sl = document.getElementById('mon-speed');
+  if (sl) {
+    sl.value = speed;
+    document.getElementById('mon-speed-val').textContent = speed;
+  }
+  await _refreshMonStatus();
+}
+
+async function _refreshMonStatus() {
+  const data = await api('/api/monitoring/status').catch(() => null);
+  if (data && !data.error) {
+    _monStatus = data.status || {};
+    renderMonitoringList();
+  }
+}
+
+function _monSorted() {
+  return [..._monEndpoints].sort((a, b) => {
+    const ua = (_monStatus[a.id] || {}).up ?? null;
+    const ub = (_monStatus[b.id] || {}).up ?? null;
+    const oa = ua === false ? 0 : ua === null ? 1 : 2;
+    const ob = ub === false ? 0 : ub === null ? 1 : 2;
+    return oa - ob || (a.name || '').localeCompare(b.name || '');
+  });
+}
+
+function renderMonitoringList() {
+  const list = document.getElementById('mon-list');
+  if (!list) return;
+  const sorted = _monSorted();
+  list.innerHTML = '';
+  if (!sorted.length) {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.style.margin = '0';
+    hint.textContent = 'No endpoints yet.';
+    list.appendChild(hint);
+    return;
+  }
+  for (const ep of sorted) {
+    list.appendChild(_buildMonRow(ep));
+  }
+}
+
+function _buildMonRow(ep) {
+  const s = _monStatus[ep.id];
+  const up = s ? s.up : null;
+  const pillColor = up === true ? '#00c83c' : up === false ? '#dc2828' : '#505050';
+
+  const row = document.createElement('div');
+  row.className = 'mon-row';
+  row.dataset.epId = ep.id;
+
+  const pill = document.createElement('span');
+  pill.className = 'mon-pill';
+  pill.style.background = pillColor;
+  pill.title = up === true ? 'Up' : up === false ? 'Down' : 'Pending';
+
+  const nameEl = document.createElement('span');
+  nameEl.className = 'mon-name';
+  nameEl.textContent = ep.name || ep.url;
+
+  const urlEl = document.createElement('span');
+  urlEl.className = 'mon-url';
+  urlEl.textContent = ep.url;
+  urlEl.title = ep.url;
+
+  const meta = document.createElement('span');
+  meta.className = 'mon-meta';
+  meta.textContent = `${ep.interval}m${s ? ' · ' + s.latency_ms + 'ms' : ''}`;
+
+  const editBtn = document.createElement('button');
+  editBtn.style.cssText = 'padding:2px 7px;font-size:11px';
+  editBtn.textContent = '✎';
+  editBtn.title = 'Edit';
+  editBtn.onclick = () => _expandMonEdit(row, ep);
+
+  const del = document.createElement('button');
+  del.className = 'btn-danger';
+  del.style.cssText = 'padding:2px 7px;font-size:11px';
+  del.textContent = '✕';
+  del.onclick = () => removeMonitoringEndpoint(ep.id);
+
+  row.append(pill, nameEl, urlEl, meta, editBtn, del);
+  return row;
+}
+
+function _expandMonEdit(row, ep) {
+  // Replace row contents with inline edit form
+  row.innerHTML = '';
+  row.style.flexWrap = 'wrap';
+  row.style.gap = '6px';
+
+  const nameIn = document.createElement('input');
+  nameIn.type = 'text';
+  nameIn.value = ep.name;
+  nameIn.placeholder = 'Shortname';
+  nameIn.style.cssText = 'width:90px;min-width:0';
+
+  const urlIn = document.createElement('input');
+  urlIn.type = 'text';
+  urlIn.value = ep.url;
+  urlIn.placeholder = 'URL / IP';
+  urlIn.style.cssText = 'flex:1;min-width:80px';
+
+  const intIn = document.createElement('input');
+  intIn.type = 'number';
+  intIn.value = ep.interval;
+  intIn.min = '1';
+  intIn.max = '1440';
+  intIn.style.cssText = 'width:52px';
+
+  const minLabel = document.createElement('span');
+  minLabel.textContent = 'min';
+  minLabel.style.cssText = 'color:var(--muted);font-size:12px;align-self:center';
+
+  const save = document.createElement('button');
+  save.textContent = 'Save';
+  save.style.cssText = 'padding:2px 8px;font-size:12px';
+  save.onclick = () => _saveMonEdit(ep.id, nameIn.value, urlIn.value, intIn.value);
+
+  const cancel = document.createElement('button');
+  cancel.textContent = 'Cancel';
+  cancel.style.cssText = 'padding:2px 8px;font-size:12px';
+  cancel.onclick = () => {
+    const ep2 = _monEndpoints.find(e => e.id === ep.id);
+    if (ep2) row.parentNode.replaceChild(_buildMonRow(ep2), row);
+  };
+
+  row.append(nameIn, urlIn, intIn, minLabel, save, cancel);
+  nameIn.focus();
+}
+
+async function _saveMonEdit(id, name, url, interval) {
+  url = (url || '').trim();
+  if (!url) { toast('URL required', false); return; }
+  const payload = { name: (name || url).trim(), url, interval: parseInt(interval) || 5 };
+  const data = await api(`/api/monitoring/endpoints/${id}`, 'PUT', payload);
+  if (data.error) { toast(data.error, false); return; }
+  const idx = _monEndpoints.findIndex(e => e.id === id);
+  if (idx !== -1) Object.assign(_monEndpoints[idx], payload);
+  renderMonitoringList();
+  toast('Saved');
+}
+
+async function addMonitoringEndpoint() {
+  const nameInput = document.getElementById('mon-new-name');
+  const urlInput = document.getElementById('mon-new-url');
+  const intervalInput = document.getElementById('mon-new-interval');
+  const url = (urlInput.value || '').trim();
+  const name = (nameInput.value || '').trim();
+  const interval = parseInt(intervalInput.value) || 5;
+  if (!url) { toast('URL required', false); return; }
+  const data = await api('/api/monitoring/endpoints', 'POST', { name: name || url, url, interval });
+  if (data.error) { toast(data.error, false); return; }
+  nameInput.value = '';
+  urlInput.value = '';
+  intervalInput.value = '5';
+  _monEndpoints.push(data.endpoint);
+  renderMonitoringList();
+  toast(`Added "${data.endpoint.name}"`);
+}
+
+async function removeMonitoringEndpoint(id) {
+  const data = await api(`/api/monitoring/endpoints/${id}`, 'DELETE');
+  if (data.error) { toast(data.error, false); return; }
+  _monEndpoints = _monEndpoints.filter(ep => ep.id !== id);
+  delete _monStatus[id];
+  renderMonitoringList();
+  toast('Removed');
+}
+
+async function saveMonitoringSettings() {
+  const speed = parseInt(document.getElementById('mon-speed').value) || 20;
+  const data = await api('/api/config/monitoring', 'POST', { scroll_speed: speed });
+  if (data.error) { toast(data.error, false); return; }
+  toast('Monitoring settings saved');
+}
+
+// ── GitHub ────────────────────────────────────────────────────────────────────
+
+async function saveGithubSettings() {
+  const payload = {
+    username: document.getElementById('gh-username').value.trim(),
+    color: hexToRgb(document.getElementById('gh-color').value),
+    refresh_interval: parseInt(document.getElementById('gh-refresh').value) || 3600,
+  };
+  const data = await api('/api/config/github', 'POST', payload);
+  if (data.error) { toast(data.error, false); return; }
+  toast('GitHub settings saved');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('nav-mode-toggle').addEventListener('change', e => {
+    _navMode = e.target.checked;
+    localStorage.setItem('led_nav_mode', _navMode);
+    _applyNavMode();
+    // Re-wire mode button clicks to reflect new behavior
+    document.querySelectorAll('#mode-buttons .mode-btn').forEach(btn => {
+      const name = btn.dataset.mode;
+      btn.onclick = () => _navMode ? selectPanel(name) : setMode(name);
+    });
+  });
   document.getElementById('img-current-wrap').style.display = 'none';
   document.getElementById('img-crop-wrap').style.display = 'none';
   document.getElementById('img-zoom').addEventListener('input', e => {
@@ -1643,4 +2086,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('img-zoom-val').textContent = e.target.value;
     renderCropCanvas();
   });
+  document.getElementById('mon-speed').addEventListener('input', e => {
+    document.getElementById('mon-speed-val').textContent = e.target.value;
+  });
+  // Refresh monitoring status every 30s
+  setInterval(_refreshMonStatus, 30000);
 });

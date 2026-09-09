@@ -78,6 +78,19 @@ header {
   background: rgba(121, 134, 203, 0.12);
 }
 
+.icon-btn.is-dnd {
+  border-color: #ef5350;
+  color: #ef5350;
+  background: rgba(239, 83, 80, 0.18);
+  font-weight: 700;
+  animation: dnd-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes dnd-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 header h1 {
   font-size: 20px;
   font-weight: 700;
@@ -206,6 +219,7 @@ button:active { opacity: .7; }
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
 .tab-btn {
@@ -317,6 +331,19 @@ button:active { opacity: .7; }
   background: #1f0a0a;
   color: var(--accent);
   font-weight: 700;
+}
+
+.mode-btn.matrix-active {
+  border-color: var(--muted);
+  border-style: dashed;
+}
+
+.nav-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
 }
 
 .hint {
@@ -476,13 +503,15 @@ code {
 
 #img-current-preview {
   display: block;
-  width: 128px;
-  height: 64px;
+  width: 100%;
+  aspect-ratio: 2 / 1;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
   border: 1px solid var(--border);
   border-radius: 4px;
   margin: 8px 0;
+  object-fit: contain;
+  background: #000;
 }
 
 .img-divider {
@@ -920,3 +949,74 @@ label input[type="file"] {
 .workout-status .ws-ready { color: #ffd54f; }
 .workout-status .ws-done  { color: #ef5350; }
 .workout-status .ws-pause { color: #ffd54f; }
+
+/* ── Monitoring ──────────────────────────────────────────────────────────── */
+
+.mon-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  min-height: 20px;
+}
+
+.mon-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.mon-pill {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background .4s;
+}
+
+.mon-name {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+  min-width: 70px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mon-url {
+  font-size: 11px;
+  color: var(--muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mon-meta {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.mon-add-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.mon-add-row input[type="text"] {
+  flex: 1;
+  min-width: 80px;
+}
+
+.mon-add-row input[type="number"] {
+  width: 58px;
+}
