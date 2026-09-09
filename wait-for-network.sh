@@ -1,17 +1,35 @@
 #!/usr/bin/env bash
-# Wait until Wi-Fi/networking has an IPv4 address and a default route.
-set -eu
+# Wait until internet connectivity is confirmed.
+#
+# Fast path: checks every 2s for up to WAIT_FOR_NETWORK_TIMEOUT seconds
+#            (handles normal boot where internet is usually quick).
+# Slow path: if fast path expires, retries every WAIT_FOR_INTERNET_RETRY
+#            seconds forever — covers post-outage scenarios where the
+#            router itself takes several minutes to reconnect.
+set -e
 
-TIMEOUT="${WAIT_FOR_NETWORK_TIMEOUT:-90}"
-END=$((SECONDS + TIMEOUT))
+LOCAL_TIMEOUT="${WAIT_FOR_NETWORK_TIMEOUT:-90}"
+RETRY_S="${WAIT_FOR_INTERNET_RETRY:-300}"
 
+_has_internet() {
+    ping -c1 -W3 8.8.8.8 >/dev/null 2>&1 \
+        || ping -c1 -W3 1.1.1.1 >/dev/null 2>&1
+}
+
+# Fast path
+END=$((SECONDS + LOCAL_TIMEOUT))
 while [ "$SECONDS" -lt "$END" ]; do
-  if ip -4 route show default 2>/dev/null | grep -q . \
-    && hostname -I 2>/dev/null | tr ' ' '\n' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-    exit 0
-  fi
-  sleep 2
+    if _has_internet; then
+        exit 0
+    fi
+    sleep 2
 done
 
-echo "Network did not become ready within ${TIMEOUT}s; starting anyway." >&2
-exit 0
+# Slow path: retry every 5 minutes until internet is reachable
+while true; do
+    echo "No internet connectivity; retrying in ${RETRY_S}s..." >&2
+    sleep "$RETRY_S"
+    if _has_internet; then
+        exit 0
+    fi
+done

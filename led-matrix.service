@@ -10,7 +10,9 @@ WorkingDirectory=/opt/led-matrix
 ExecStartPre=/bin/bash /opt/led-matrix/wait-for-network.sh
 ExecStart=/opt/led-matrix/venv/bin/python /opt/led-matrix/main.py
 Restart=on-failure
-RestartSec=5
+RestartSec=30
+TimeoutStartSec=infinity
+StartLimitIntervalSec=0
 StandardOutput=journal
 StandardError=journal
 

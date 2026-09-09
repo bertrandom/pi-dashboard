@@ -23,6 +23,7 @@ class LibraryMode(BaseMode):
         self._last_scroll_t = 0.0
         self._loaded_id = None
         self._last_cfg_check = 0.0
+        self._pinned = False
 
     def start(self):
         super().start()
@@ -32,7 +33,19 @@ class LibraryMode(BaseMode):
         self._last_scroll_t = time.time()
         self._loaded_id = None
         self._last_cfg_check = 0.0
+        self._pinned = False
         self._reload_cfg()
+
+    def jump_to(self, item_id):
+        self._reload_cfg()
+        for i, item in enumerate(self._items):
+            if item.get('id') == item_id:
+                self._current_idx = i
+                self._item_start = time.time()
+                self._loaded_id = None
+                self._pinned = True
+                return True
+        return False
 
     def _reload_cfg(self):
         cfg = self.config.get_section('library')
@@ -93,7 +106,7 @@ class LibraryMode(BaseMode):
         item = self._items[self._current_idx]
         duration = max(1, int(item.get('duration', self._interval) or self._interval))
 
-        if self._rotation_enabled and len(self._items) > 1 and now - self._item_start >= duration:
+        if not self._pinned and self._rotation_enabled and len(self._items) > 1 and now - self._item_start >= duration:
             self._current_idx = (self._current_idx + 1) % len(self._items)
             self._item_start = now
             self._loaded_id = None

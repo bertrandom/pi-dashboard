@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import io
+import socket
 import unicodedata
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -161,9 +162,19 @@ def _text_w(text, font):
         return len(text) * 4
 
 
+_UNICODE_SUBS = {
+    '‘': "'", '’': "'",  # ' '
+    '“': '"', '”': '"',  # " "
+    '–': '-', '—': '-',  # – —
+    '…': '.', '•': '.',  # … •
+    '·': '.', '’': "'",
+}
+
+
 def _display_text(text):
     result = []
     for char in text:
+        char = _UNICODE_SUBS.get(char, char)
         if char in TEXT_GLYPHS:
             result.append(char)
         else:
@@ -177,7 +188,7 @@ def _display_text(text):
                 elif b.upper() in TEXT_GLYPHS:
                     found = b.upper()
                     break
-            result.append(found if found else '?')
+            result.append(found if found else ' ')
     return ''.join(result)
 
 
@@ -223,6 +234,9 @@ class SpotifyMode(BaseMode):
         self.sp = None
         self.track = None
         self.album_art = None
+        self._last_error = None
+        self._last_fetch_info = None
+        self._fetch_thread = None
         self.rotation = 0.0
         self._lock = threading.Lock()
         self.last_render = time.time()
@@ -248,6 +262,7 @@ class SpotifyMode(BaseMode):
 
     def _init_spotify(self):
         if not SPOTIPY_AVAILABLE:
+            self._last_error = 'spotipy not installed'
             return
         cfg = self.config.get_section('spotify')
         cid = cfg.get('client_id', '')
@@ -255,6 +270,7 @@ class SpotifyMode(BaseMode):
         redirect = cfg.get('redirect_uri', '') or ('http://localhost:8080' + _callback_path(cfg))
 
         if not cid or not secret:
+            self._last_error = 'missing client_id or client_secret in config'
             return
         try:
             auth = SpotifyOAuth(
@@ -265,39 +281,126 @@ class SpotifyMode(BaseMode):
                 cache_path=SPOTIFY_CACHE_PATH,
                 open_browser=False,
             )
-            self.sp = spotipy.Spotify(auth_manager=auth)
+            # SpotifyOAuth's token-refresh POST has no timeout by default — mount
+            # an adapter so it respects the same 10s limit as API calls.
+            _auth_session = getattr(auth, '_session', None)
+            if _auth_session is not None:
+                class _TimeoutAdapter(requests.adapters.HTTPAdapter):
+                    def send(self, *args, **kwargs):
+                        kwargs.setdefault('timeout', 10)
+                        return super().send(*args, **kwargs)
+                _auth_session.mount('https://', _TimeoutAdapter())
+                _auth_session.mount('http://', _TimeoutAdapter())
+            self.sp = spotipy.Spotify(auth_manager=auth, requests_timeout=10)
+            self._last_error = None
         except Exception as e:
-            print(f"Spotify init error: {e}")
+            msg = f"SpotifyOAuth init error: {type(e).__name__}: {e}"
+            print(msg)
+            self._last_error = msg
 
     def reinit(self):
         with self._lock:
             self.sp = None
         self._wakeup.set()  # trigger re-init on next loop iteration
 
+    def _timed_fetch(self):
+        if self._fetch_thread and self._fetch_thread.is_alive():
+            # Old thread still hung — abandon it immediately and reset the
+            # client so the next call gets a fresh connection pool.
+            with self._lock:
+                self.sp = None
+            raise TimeoutError('fetch hung — resetting client for retry')
+
+        exc_box = []
+
+        def _run():
+            try:
+                self._fetch()
+            except Exception as e:
+                exc_box.append(e)
+
+        self._fetch_thread = threading.Thread(
+            target=_run, daemon=True, name='spotify-fetch'
+        )
+        self._fetch_thread.start()
+        self._fetch_thread.join(timeout=15)
+
+        if self._fetch_thread.is_alive():
+            self._last_error = 'fetch timed out (>15s) — network hang'
+            raise TimeoutError(self._last_error)
+
+        if exc_box:
+            raise exc_box[0]
+
+    def _timed_init(self):
+        """Run _init_spotify() in a thread with a 15s timeout."""
+        exc_box = []
+
+        def _run():
+            try:
+                self._init_spotify()
+            except Exception as e:
+                exc_box.append(e)
+
+        t = threading.Thread(target=_run, daemon=True, name='spotify-init')
+        t.start()
+        t.join(timeout=15)
+        if t.is_alive():
+            with self._lock:
+                self.sp = None
+            self._last_error = 'init timed out (>15s) — network hang during auth'
+            raise TimeoutError(self._last_error)
+        if exc_box:
+            raise exc_box[0]
+
     def _update_loop(self):
+        _fail_streak = 0
+        _rate_limit_until = 0.0
         while True:
+            extra_wait = 0
+            now = time.time()
+            if now < _rate_limit_until:
+                self._wakeup.wait(_rate_limit_until - now)
+                self._wakeup.clear()
+                continue
+
             try:
                 if not self.sp:
-                    self._init_spotify()
+                    self._timed_init()
                 if self.sp:
-                    self._fetch()
+                    self._timed_fetch()
+                _fail_streak = 0
             except Exception as e:
-                print(f"Spotify fetch error: {e}")
+                msg = f"{type(e).__name__}: {e}"
+                print(f"Spotify fetch error: {msg}")
+                self._last_error = msg
+                _fail_streak += 1
+                if _fail_streak >= 3:
+                    with self._lock:
+                        self.track = None
+                # Back off hard on rate limit — 5 min minimum
+                if '429' in msg or 'Too Many Requests' in msg or 'QUOTA_EXCEEDED' in msg:
+                    extra_wait = 300
+                    _rate_limit_until = time.time() + extra_wait
+                    print(f"[Spotify] rate limited — backing off {extra_wait}s")
 
             with self._lock:
                 track = self.track
 
-            if self.active:
-                # Foreground: poll frequently
+            if extra_wait:
+                wait_s = extra_wait
+            elif self.active:
+                # Progress interpolates locally so high poll rate isn't needed.
+                # Spotify dev-mode quota: 30s poll = ~2880 calls/day max.
                 if track and track.get('is_playing'):
-                    wait_s = 4
+                    wait_s = 30
                 elif track:
-                    wait_s = 10
+                    wait_s = 60
                 else:
-                    wait_s = 5
+                    wait_s = 30
             else:
-                # Background: light poll so we notice when playback starts
-                wait_s = 10
+                # Background: only need to notice when playback starts
+                wait_s = 120
 
             self._wakeup.wait(wait_s)
             self._wakeup.clear()
@@ -315,13 +418,38 @@ class SpotifyMode(BaseMode):
     def _fetch(self):
         if not self.sp:
             return
-        result = self.sp.current_playback()
+        # Apply a socket-level timeout so the token-refresh POST (which bypasses
+        # requests_timeout) also cannot hang indefinitely.
+        _prev_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(10)
+        try:
+            result = self.sp.current_playback()
+            used_fallback = False
+            if not result:
+                result = self.sp.currently_playing()
+                used_fallback = True
+        finally:
+            socket.setdefaulttimeout(_prev_timeout)
         if not result:
+            self._last_fetch_info = {
+                'result': 'both_none',
+                'used_fallback': used_fallback,
+            }
             with self._lock:
                 self.track = None
             return
 
-        item = result.get('item') or {}
+        item = result.get('item')
+        self._last_fetch_info = {
+            'is_playing': result.get('is_playing'),
+            'item_type': type(item).__name__,
+            'item_name': (item or {}).get('name') if isinstance(item, dict) else None,
+            'used_fallback': used_fallback,
+            'currently_playing_type': result.get('currently_playing_type'),
+        }
+        print(f"[Spotify] fetch: {self._last_fetch_info}")
+
+        item = item or {}
         if not item:
             with self._lock:
                 self.track = None

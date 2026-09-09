@@ -44,6 +44,10 @@ from modes.image import ImageMode
 from modes.library import LibraryMode
 from modes.weather import WeatherMode
 from modes.workout import WorkoutMode
+from modes.onair import OnAirMode
+from modes.github import GitHubMode
+from modes.wheel import WheelMode
+from modes.monitoring import MonitoringMode
 
 
 # ── Simulation canvas (dev/non-Pi use) ──────────────────────────────────────
@@ -70,6 +74,10 @@ class MatrixController:
         'library': LibraryMode,
         'weather': WeatherMode,
         'workout': WorkoutMode,
+        'onair': OnAirMode,
+        'github': GitHubMode,
+        'wheel': WheelMode,
+        'monitoring': MonitoringMode,
     }
 
     def __init__(self):
@@ -87,6 +95,9 @@ class MatrixController:
         self._reminder_last_fired = {}
         self._screen_on = True
         self._last_applied_brightness = None
+        self._clear_next_frame = False
+        self._dnd = False
+        self._dnd_return_mode = None
         self._setup_gpio()
         self._apply_auto_brightness()
         self.set_mode(self.config.get('mode', 'clock'))
@@ -151,6 +162,9 @@ class MatrixController:
         if name not in self.modes:
             logger.error(f"Unknown mode '{name}'")
             return False
+        if self._dnd and name != 'onair':
+            logger.debug(f"set_mode '{name}' blocked by DND")
+            return False
         if manual:
             self._carousel_manual_until = time.monotonic() + 1.0
         with self._mode_lock:
@@ -161,12 +175,33 @@ class MatrixController:
             if kwargs:
                 self.config.set_section(name, kwargs)
             self.current_mode.start()
+            self._clear_next_frame = True
         self.config.set('mode', name)
         logger.info(f"Mode → {name}")
         return True
 
     def get_mode(self):
         return self.current_mode_name
+
+    def enable_dnd(self):
+        if self._dnd:
+            return
+        self._dnd_return_mode = self.get_mode()
+        self._dnd = True
+        self.set_mode('onair', manual=True)
+        logger.info("DND enabled")
+
+    def disable_dnd(self):
+        if not self._dnd:
+            return
+        self._dnd = False
+        return_mode = self._dnd_return_mode or 'clock'
+        self._dnd_return_mode = None
+        self.set_mode(return_mode, manual=True)
+        logger.info(f"DND disabled → {return_mode}")
+
+    def get_dnd(self):
+        return self._dnd
 
     def get_mode_names(self):
         return list(self.modes.keys())
@@ -187,6 +222,10 @@ class MatrixController:
 
     def _check_reminders(self):
         if self.get_mode() == 'reminder':
+            return
+        if self._dnd:
+            return
+        if not self._screen_on:
             return
 
         cfg = self.config.get_section('reminders')
@@ -247,6 +286,10 @@ class MatrixController:
             # Hold carousel while a workout is in progress
             workout_mode = self.modes.get('workout')
             if workout_mode and workout_mode.is_active():
+                last_switch = now
+                continue
+            # Hold carousel while a reminder is displaying
+            if self.get_mode() == 'reminder':
                 last_switch = now
                 continue
             interval = self._carousel_duration(self.get_mode(), durations)
@@ -356,15 +399,18 @@ class MatrixController:
                         time.sleep(0.033)
                     continue
 
-                with self._mode_lock:
-                    mode = self.current_mode
+                if self._clear_next_frame:
+                    canvas.Clear()
+                    self._clear_next_frame = False
 
                 render_start = time.monotonic()
-                if mode:
-                    try:
-                        mode.render(canvas)
-                    except Exception as e:
-                        logger.error(f"Render error: {e}")
+                with self._mode_lock:
+                    mode = self.current_mode
+                    if mode:
+                        try:
+                            mode.render(canvas)
+                        except Exception as e:
+                            logger.error(f"Render error: {e}")
                 render_end = time.monotonic()
 
                 requested_mode = None

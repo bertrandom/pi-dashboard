@@ -81,6 +81,7 @@ def create_app(get_controller_fn):
             brightness=c.config.get('brightness', 50),
             screen_on=c.get_screen(),
             night_mode_active=c.night_mode_active(),
+            dnd=c.get_dnd(),
             config=c.config.get_all(),
         )
 
@@ -110,11 +111,31 @@ def create_app(get_controller_fn):
         name = data.get('mode', '').strip()
         if not name:
             return jsonify(error='mode field required'), 400
+        if name == 'onair':
+            return jsonify(error='use /api/dnd to enable on air mode'), 400
+        if c.get_dnd():
+            return jsonify(error='dnd_active'), 409
 
         ok = c.set_mode(name)
         if not ok:
             return jsonify(error=f'unknown mode: {name}'), 400
         return jsonify(mode=name, status='ok')
+
+    # ── Do Not Disturb ────────────────────────────────────────────────────────
+
+    @app.route('/api/dnd', methods=['GET', 'POST'])
+    def dnd():
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        if request.method == 'GET':
+            return jsonify(enabled=c.get_dnd())
+        data = request.get_json(force=True, silent=True) or {}
+        if bool(data.get('enabled', False)):
+            c.enable_dnd()
+        else:
+            c.disable_dnd()
+        return jsonify(status='ok', enabled=c.get_dnd(), mode=c.get_mode())
 
     # ── Brightness ────────────────────────────────────────────────────────────
 
@@ -154,7 +175,7 @@ def create_app(get_controller_fn):
         if not c:
             return jsonify(error='controller not ready'), 503
 
-        allowed = {'clock', 'spotify', 'gameoflife', 'text', 'patternflow', 'matrix', 'carousel', 'draw', 'pomodoro', 'reminders', 'night_mode', 'weather', 'workout'}
+        allowed = {'clock', 'spotify', 'gameoflife', 'text', 'patternflow', 'matrix', 'carousel', 'draw', 'pomodoro', 'reminders', 'night_mode', 'weather', 'workout', 'github', 'wheel', 'monitoring'}
         if section not in allowed:
             return jsonify(error=f'unknown section: {section}'), 400
 
@@ -175,7 +196,43 @@ def create_app(get_controller_fn):
         if section == 'night_mode':
             c.refresh_brightness()
 
+        if section == 'github' and 'username' in data:
+            github_mode = c.modes.get('github')
+            if github_mode:
+                github_mode.refresh()
+
         return jsonify(status='ok', config=c.config.get_section(section))
+
+    # ── Decision Wheel ────────────────────────────────────────────────────────
+
+    @app.route('/api/wheel', methods=['GET'])
+    def wheel_state():
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        wheel_mode = c.modes.get('wheel')
+        if not wheel_mode:
+            return jsonify(error='wheel mode not available'), 404
+        return jsonify(wheel_mode.get_state())
+
+    @app.route('/api/wheel/spin', methods=['POST'])
+    def wheel_spin():
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        wheel_mode = c.modes.get('wheel')
+        if not wheel_mode:
+            return jsonify(error='wheel mode not available'), 404
+        cfg = c.config.get_section('wheel')
+        choices = [str(ch).strip() for ch in cfg.get('choices', []) if str(ch).strip()]
+        if not choices:
+            return jsonify(status='no_choices')
+        if wheel_mode._phase == 'spinning':
+            return jsonify(status='busy')
+        result = wheel_mode.spin()
+        if result is None:
+            return jsonify(status='busy')
+        return jsonify(status='ok', choice=result)
 
     @app.route('/api/draw', methods=['GET', 'POST'])
     def draw():
@@ -192,7 +249,79 @@ def create_app(get_controller_fn):
             c.set_mode('draw')
         return jsonify(status='ok', config=c.config.get_section('draw'))
 
+    @app.route('/api/draw/load-from-library/<item_id>', methods=['POST'])
+    def draw_load_from_library(item_id):
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        lib_cfg = c.config.get_section('library')
+        item = next((it for it in lib_cfg.get('items', []) if it.get('id') == item_id), None)
+        if not item:
+            return jsonify(error='item not found'), 404
+        path = os.path.join(_LIBRARY_DIR, item.get('filename', ''))
+        if not os.path.exists(path):
+            return jsonify(error='file not found'), 404
+        try:
+            img = _PILImage.open(path).convert('RGB')
+            # Use first frame only for GIFs
+            if hasattr(img, 'n_frames') and img.n_frames > 1:
+                img.seek(0)
+                img = img.convert('RGB').copy()
+            width, height = img.size
+            px = img.load()
+            pixels = []
+            for y in range(min(height, 32)):
+                for x in range(width):
+                    r, g, b = px[x, y]
+                    if r or g or b:
+                        pixels.append({'x': x, 'y': y, 'color': [r, g, b]})
+            draw_cfg = {
+                'width': width,
+                'scroll': item.get('scroll', False),
+                'scroll_speed': item.get('scroll_speed', 20),
+                'pixels': pixels,
+            }
+            c.config.set_section('draw', draw_cfg)
+            if c.get_mode() != 'draw':
+                c.set_mode('draw')
+            return jsonify(status='ok', config=c.config.get_section('draw'))
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
     # ── Image ─────────────────────────────────────────────────────────────────
+
+    @app.route('/api/image/load-from-library/<item_id>', methods=['POST'])
+    def image_load_from_library(item_id):
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        lib_cfg = c.config.get_section('library')
+        item = next((it for it in lib_cfg.get('items', []) if it.get('id') == item_id), None)
+        if not item:
+            return jsonify(error='item not found'), 404
+        src_path = os.path.join(_LIBRARY_DIR, item.get('filename', ''))
+        if not os.path.exists(src_path):
+            return jsonify(error='file not found'), 404
+        try:
+            is_gif = src_path.lower().endswith('.gif')
+            for p in (IMAGE_PNG, IMAGE_GIF):
+                if os.path.exists(p):
+                    os.remove(p)
+            if is_gif:
+                shutil.copy2(src_path, IMAGE_GIF)
+            else:
+                lib_img = _PILImage.open(src_path).convert('RGB')
+                if lib_img.size != (64, 32):
+                    lib_img = lib_img.resize((64, 32), _PILImage.LANCZOS)
+                lib_img.save(IMAGE_PNG, 'PNG')
+            image_mode = c.modes.get('image')
+            if image_mode:
+                image_mode._last_check = 0.0
+            if c.get_mode() != 'image':
+                c.set_mode('image')
+            return jsonify(status='ok', is_gif=is_gif)
+        except Exception as e:
+            return jsonify(error=str(e)), 500
 
     @app.route('/api/image', methods=['GET', 'DELETE'])
     def image_endpoint():
@@ -344,6 +473,30 @@ def create_app(get_controller_fn):
         return jsonify(status='ok', action=action, result=result)
 
     # ── Spotify OAuth ─────────────────────────────────────────────────────────
+
+    @app.route('/api/spotify/status')
+    def spotify_status():
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        mode = c.modes.get('spotify')
+        if not mode:
+            return jsonify(error='spotify mode not loaded'), 500
+        with mode._lock:
+            track = dict(mode.track) if mode.track else None
+            sp_ready = mode.sp is not None
+        cfg = c.config.get_section('spotify')
+        return jsonify(
+            sp_initialized=sp_ready,
+            last_error=mode._last_error,
+            last_fetch=mode._last_fetch_info,
+            has_client_id=bool(cfg.get('client_id')),
+            has_client_secret=bool(cfg.get('client_secret')),
+            cache_path=SPOTIFY_CACHE_PATH,
+            cache_exists=os.path.exists(SPOTIFY_CACHE_PATH),
+            track=track,
+            is_playing=bool(track and track.get('is_playing')),
+        )
 
     @app.route('/api/spotify/auth_url')
     def spotify_auth_url():
@@ -626,6 +779,21 @@ def create_app(get_controller_fn):
         c.config.set_section('library', {'items': [it for it in items if it.get('id') != item_id]})
         return jsonify(status='ok', config=c.config.get_section('library'))
 
+    @app.route('/api/library/display/<item_id>', methods=['POST'])
+    def library_display(item_id):
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        lib_mode = c.modes.get('library')
+        if not lib_mode:
+            return jsonify(error='library mode not loaded'), 404
+        if c.get_mode() != 'library':
+            c.set_mode('library')
+        found = lib_mode.jump_to(item_id)
+        if not found:
+            return jsonify(error='item not found'), 404
+        return jsonify(status='ok', item_id=item_id)
+
     @app.route('/api/library/config', methods=['POST'])
     def library_config():
         c = ctrl()
@@ -740,6 +908,67 @@ def create_app(get_controller_fn):
     def weather_test_conditions():
         from modes.weather import TEST_PRESETS
         return jsonify(conditions=list(TEST_PRESETS.keys()))
+
+    # ── Monitoring ────────────────────────────────────────────────────────────
+
+    @app.route('/api/monitoring/status')
+    def monitoring_status():
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        mode = c.modes.get('monitoring')
+        return jsonify(status=mode.get_status() if mode else {})
+
+    @app.route('/api/monitoring/endpoints', methods=['POST'])
+    def monitoring_add_endpoint():
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        data = request.get_json(force=True, silent=True) or {}
+        url = (data.get('url') or '').strip()
+        if not url:
+            return jsonify(error='url required'), 400
+        ep = {
+            'id': _lib_id(),
+            'name': (data.get('name') or url)[:20].strip(),
+            'url': url,
+            'interval': max(1, int(data.get('interval', 5))),
+        }
+        cfg = c.config.get_section('monitoring')
+        endpoints = cfg.get('endpoints', [])
+        endpoints.append(ep)
+        c.config.set_section('monitoring', {'endpoints': endpoints})
+        return jsonify(status='ok', endpoint=ep)
+
+    @app.route('/api/monitoring/endpoints/<ep_id>', methods=['DELETE'])
+    def monitoring_delete_endpoint(ep_id):
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        cfg = c.config.get_section('monitoring')
+        endpoints = [ep for ep in cfg.get('endpoints', []) if ep.get('id') != ep_id]
+        c.config.set_section('monitoring', {'endpoints': endpoints})
+        return jsonify(status='ok')
+
+    @app.route('/api/monitoring/endpoints/<ep_id>', methods=['PUT'])
+    def monitoring_update_endpoint(ep_id):
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = c.config.get_section('monitoring')
+        endpoints = cfg.get('endpoints', [])
+        for ep in endpoints:
+            if ep.get('id') == ep_id:
+                if 'name' in data:
+                    ep['name'] = str(data['name'])[:20]
+                if 'url' in data:
+                    ep['url'] = str(data['url'])
+                if 'interval' in data:
+                    ep['interval'] = max(1, int(data['interval']))
+                break
+        c.config.set_section('monitoring', {'endpoints': endpoints})
+        return jsonify(status='ok')
 
     # ── Settings export / import ──────────────────────────────────────────────
 

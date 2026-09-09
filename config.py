@@ -122,6 +122,10 @@ DEFAULT_CONFIG = {
         "city_interval": 30,
         "cities": [],
         "test_condition": ""
+    },
+    "monitoring": {
+        "endpoints": [],
+        "scroll_speed": 20
     }
 }
 
@@ -130,6 +134,7 @@ class Config:
     def __init__(self):
         self._data = self._deep_copy(DEFAULT_CONFIG)
         self._lock = threading.Lock()
+        self._save_lock = threading.Lock()
         self._load()
 
     def _deep_copy(self, d):
@@ -158,11 +163,22 @@ class Config:
                 base[key] = value
 
     def save(self):
-        try:
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(self._data, f, indent=2)
-        except Exception as e:
-            print(f"Config save error: {e}")
+        with self._save_lock:
+            with self._lock:
+                data = self._deep_copy(self._data)
+            temp_file = f"{CONFIG_FILE}.tmp"
+            try:
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_file, CONFIG_FILE)
+            except Exception as e:
+                print(f"Config save error: {e}")
+                try:
+                    os.remove(temp_file)
+                except OSError:
+                    pass
 
     def get(self, key, default=None):
         with self._lock:
@@ -174,15 +190,22 @@ class Config:
 
     def set(self, key, value):
         with self._lock:
+            if self._data.get(key) == value:
+                return False
             self._data[key] = value
         self.save()
+        return True
 
     def set_section(self, section, data):
         with self._lock:
             if section not in self._data:
                 self._data[section] = {}
+            before = self._deep_copy(self._data[section])
             self._deep_update(self._data[section], data)
+            if self._data[section] == before:
+                return False
         self.save()
+        return True
 
     def get_all(self):
         with self._lock:
@@ -190,5 +213,9 @@ class Config:
 
     def import_all(self, data):
         with self._lock:
+            before = self._deep_copy(self._data)
             self._deep_update(self._data, data)
+            if self._data == before:
+                return False
         self.save()
+        return True

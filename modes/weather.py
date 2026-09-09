@@ -110,9 +110,10 @@ class WeatherMode(BaseMode):
         self._name_x = 0.0
         self._last_cond = None
         self._known_city_ids = []
-        self._fetch_stop.clear()
+        self._fetch_stop = threading.Event()
         self._fetch_thread = threading.Thread(
-            target=self._fetch_loop, daemon=True, name='weather-fetch'
+            target=self._fetch_loop, args=(self._fetch_stop,),
+            daemon=True, name='weather-fetch'
         )
         self._fetch_thread.start()
 
@@ -122,8 +123,8 @@ class WeatherMode(BaseMode):
 
     # ── Background fetch ──────────────────────────────────────────────────────
 
-    def _fetch_loop(self):
-        while not self._fetch_stop.wait(0):
+    def _fetch_loop(self, stop_event):
+        while not stop_event.is_set():
             cfg = self.config.get_section('weather')
             api_key = cfg.get('api_key', '').strip()
             cities = cfg.get('cities', [])
@@ -141,10 +142,12 @@ class WeatherMode(BaseMode):
 
             now = time.monotonic()
             for i, city in enumerate(cities):
+                if stop_event.is_set():
+                    break
                 if api_key and now - self._last_fetch.get(i, 0) >= interval:
                     self._fetch_city(i, city, api_key, units)
 
-            self._fetch_stop.wait(30)
+            stop_event.wait(30)
 
     def _fetch_city(self, idx, city, api_key, units):
         name = city.get('name', '')

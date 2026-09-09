@@ -2,7 +2,7 @@
 
 Fits a HUB75 64x32 3mm pitch. It is important to print the Screen on the lowest layer height possible (max 0.2 mm)
 
-A full-featured controller for a **64×32 RGB LED matrix** driven by a Raspberry Pi with the Adafruit RGB Matrix Bonnet. Modes: digital clock, Spotify now-playing, Conway's Game of Life, scrolling text, Patternflow, pixel draw, Pomodoro timer, reminders, image/GIF display, image library, and live weather. Controlled via REST API and a built-in web interface.
+A full-featured controller for a **64×32 RGB LED matrix** driven by a Raspberry Pi with the Adafruit RGB Matrix Bonnet. Modes: digital clock, Spotify now-playing, Conway's Game of Life, scrolling text, Patternflow, pixel draw, Pomodoro timer, reminders, image/GIF display, image library, live weather, GitHub contribution grid, decision wheel, and Do Not Disturb (ON AIR). Controlled via REST API and a built-in web interface.
 
 ---
 
@@ -19,9 +19,12 @@ A full-featured controller for a **64×32 RGB LED matrix** driven by a Raspberry
 
 ## Current Features
 
-- Modes: clock, Spotify, Game of Life, text, Patternflow (Original project : https://github.com/engmung/PatternFlow), draw, Pomodoro, background reminders, image/GIF display, image library, and live weather.
+- Modes: clock, Spotify, Game of Life, text, Patternflow (Original project : https://github.com/engmung/PatternFlow), draw, Pomodoro, background reminders, image/GIF display, image library, live weather, GitHub contribution grid, decision wheel, and Do Not Disturb (ON AIR).
 - Built-in web UI for mode switching, brightness, mode settings, carousel, reminders, image upload/crop, image library, and service controls.
-- REST API for mode/config updates, Spotify OAuth, Patternflow controls, Pomodoro timer events, draw updates, image upload/delete, library management, and system actions.
+- **Navigate without displaying**: toggle in the web UI lets you browse and edit any mode's settings without changing what the matrix shows; a dedicated "Display on matrix" button pushes the viewed mode when ready.
+- **Do Not Disturb (ON AIR)**: one-click header button locks the matrix to an "ON AIR" sign, blocking carousel, reminders, Pomodoro auto-switch, and all other interruptions until disabled.
+- **Library integration**: load any library item directly into Image mode (copy to matrix) or Draw mode (open for editing); individual "Display" button in the library list shows only that item.
+- REST API for mode/config updates, Spotify OAuth, Patternflow controls, Pomodoro timer events, draw updates, image upload/delete, library management, DND toggle, and system actions.
 - Settings export and import as a single JSON file.
 - Reminder color palettes: named palettes with instant load into any reminder.
 - Matrix runtime tuning through config for GPIO slowdown, PWM bits, refresh-rate limiting, and hardware pulsing.
@@ -101,6 +104,9 @@ main.py            ← render loop + controller
     ├── image.py      ← Static image and animated GIF display
     ├── library.py    ← Persistent image library with rotation
     ├── weather.py    ← Live weather with animated conditions and forecast graph
+    ├── onair.py      ← Do Not Disturb / ON AIR sign
+    ├── github.py     ← GitHub contribution grid (52-week heatmap)
+    ├── wheel.py      ← Decision wheel with spin animation
     └── patternflow/  ← Generative pattern engine
 ```
 
@@ -116,7 +122,59 @@ Reminder scheduling is handled by the controller in the background: when a remin
 
 ## Recent Changes
 
-### 2026-07-14 (latest)
+### 2026-07-15 (latest)
+
+- Added **Decision Wheel** mode (`modes/wheel.py`):
+  - Add any number of choices from the web UI (Wheel tab); choices are saved to config and persist across restarts.
+  - Click **Spin!** in the UI or call `POST /api/wheel/spin` to start the animation and pick a random winner. The API responds immediately with the chosen label so the UI can display it before the animation finishes.
+  - **Animation sequence** — four phases on the 64×32 matrix:
+    1. **Idle**: coloured wheel with a pointer arrow on the right; previously chosen segment is highlighted, others dimmed.
+    2. **Spinning** (~3–5 s): quintic ease-out deceleration so the wheel gradually slows to a precise stop. Coloured particles fly off the rim while spinning.
+    3. **Result** (2 s): winning segment pulses white; a ring of rainbow sparkles orbits the wheel.
+    4. **Show text**: full-screen dark gradient background with the winning choice name scrolling in rainbow colours with twinkle effects; returns to Idle when scroll completes.
+  - Config section `wheel`: `choices` (list of strings).
+  - New API: `GET /api/wheel` → state; `POST /api/wheel/spin` → `{status, choice}`.
+  - **Wheel tab** in the web UI: add/remove choices (Enter key supported), Spin button with live result display, Display Wheel button.
+  - **Controls tab panel**: quick Spin button with inline result, link to Wheel tab.
+
+- Added **GitHub Contributions** mode (`modes/github.py`):
+  - Renders the last 52 weeks of a GitHub user's public contribution heatmap as a 52×7 pixel grid (each cell 1×4 px, centred on the 64×32 display).
+  - Fetches from `github.com/users/{username}/contributions` — no API token needed for public profiles.
+  - Contribution levels 0–4 mapped to dim→bright using a configurable base colour (default green).
+  - Today's cell pulses white. Loading / error / no-username fallback screens.
+  - Background fetch thread; configurable refresh interval (default 1 h, minimum 5 min). Changing the username triggers an immediate re-fetch.
+  - Config section `github`: `username`, `color`, `refresh_interval`.
+  - **GitHub tab** in the web UI: username, colour picker, refresh interval, Save & Display buttons.
+
+### 2026-07-15
+
+- Added **Do Not Disturb (ON AIR)** mode (`modes/onair.py`):
+  - Header button "DND" toggles the mode on/off; pulses red while active.
+  - While active, the matrix displays a dark-red "ON AIR" sign with blinking red dots on each side.
+  - Blocks **all** automatic mode changes: carousel rotation, reminder takeovers, Pomodoro auto-switch, and any mode self-switch from the render loop.
+  - Also blocks manual mode-change API calls (`POST /api/mode` returns 409 while DND is active).
+  - `enable_dnd()` saves the current mode and switches to `onair`; `disable_dnd()` restores it.
+  - `onair` is not exposed as a selectable mode in the web UI — it is only reachable through the DND toggle.
+  - New API: `GET /api/dnd` → `{ "enabled": bool }`; `POST /api/dnd` → `{ "enabled": true|false }`.
+  - `/api/status` now includes `"dnd": bool`.
+
+- Added **Navigate without displaying** mode toggle:
+  - Checkbox in the Mode selector card: **Navigate without displaying**.
+  - When off (default): clicking a mode button switches the matrix immediately (original behavior).
+  - When on: clicking a mode button only opens that mode's settings panel; the matrix is unaffected.
+  - A **"Display on matrix"** button appears alongside the toggle and pushes the currently viewed panel to the matrix.
+  - The mode button that is active on the matrix is shown with a dashed border when different from the selected panel.
+  - Setting persists across page reloads via `localStorage`.
+
+- Added **Library → Image** and **Library → Draw** loading:
+  - Image panel: "Load from Library" select + button — copies the chosen library item to `matrix_image.png/gif` and switches to Image mode.
+  - Draw panel: "Load from Library" select + button — converts the library item's pixels into the draw pixel format (preserving width and scroll settings from the library item), saves as the draw config, and switches to Draw mode. GIFs use the first frame only.
+  - Selects are populated from the library item list and stay in sync whenever the library changes.
+  - New API: `POST /api/image/load-from-library/<id>` and `POST /api/draw/load-from-library/<id>`.
+
+- Fixed **Library "Display" button**: previously always started the library rotation from the first item; now jumps directly to the clicked item via `POST /api/library/display/<id>`.
+
+### 2026-07-14
 
 - Added **vertical scroll** to Text mode:
   - New `scroll_direction` config key: `"off"` (static, centered), `"horizontal"` (original ticker), or `"vertical"` (teleprompter — text enters from bottom, scrolls up).
@@ -387,6 +445,14 @@ Config is stored at `/opt/led-matrix/config.json` and updated live through the A
         "source": "draw"
       }
     ]
+  },
+  "github": {
+    "username": "torvalds",
+    "color": [0, 255, 0],
+    "refresh_interval": 3600
+  },
+  "wheel": {
+    "choices": ["Lunch", "Workout", "Task 1", "Activity B"]
   }
 }
 ```
@@ -402,21 +468,27 @@ Open `http://<pi-ip>:8080` in any browser.
 
 Current UI sections:
 
-- **Mode** — switch foreground modes instantly.
+- **Mode** — switch foreground modes. Includes a **Navigate without displaying** toggle: when enabled, clicking a mode only opens its settings panel without touching the matrix; a **Display on matrix** button sends the current panel to the matrix. The mode button with a dashed border is what is active on the matrix when it differs from the viewed panel.
+- **DND button** (header) — toggles Do Not Disturb / ON AIR mode; pulses red while active. Blocks all automatic and manual mode changes until disabled.
 - **Brightness** — 1–100% slider.
 - **Night Mode** — auto-dim between configurable hours at a lower brightness.
 - **Clock** — color picker and seconds toggle.
 - **Text** — manual or URL content, color, scroll speed, and scroll mode selector (Off / Horizontal / Vertical teleprompter).
 - **Game of Life** — color, speed, and edge wrap.
 - **Spotify** — credentials, authorize button, callback path, and artist/track scroll speeds.
-- **Draw** — pixel canvas, pen/eraser, width controls, optional scrolling, text placement, and "Save to Library" button.
+- **Draw** — pixel canvas, pen/eraser, width controls, optional scrolling, text placement, "Save to Library" button, and "Load from Library" selector (loads a library item into the draw canvas for editing).
 - **Pomodoro** — gradient, background, text, tick pixel, flash, and return-after-elapsed settings.
 - **Patternflow** — pattern selector, web knob/button controls, FPS overlay, Donut fast render, and fast image push.
-- **Image** — upload a static image or animated GIF, crop/zoom in the browser, see a live pixelated preview; remove button clears and returns to clock; "Save to Library" button saves the current image.
+- **Image** — upload a static image or animated GIF, crop/zoom in the browser, see a live pixelated preview; remove button clears and returns to clock; "Save to Library" button saves the current image; "Load from Library" selector copies a library item to Image mode.
 - **Library** — displays current library status; "Manage Library" button jumps to the Library tab.
+- **Decision Wheel** — quick Spin button with inline result; link to Wheel tab for managing choices.
+- **GitHub** — contribution grid status; link to GitHub tab for settings.
 - **Carousel tab** — enable carousel rotation and set per-mode durations.
 - **Reminders tab** — Color Palettes card (create/edit/delete named palettes; load into any reminder via dropdown; clear colors); Reminders card (enable, add/edit/delete timed reminder takeovers).
-- **Library tab** — manage saved items (rename, set duration, remove), toggle auto-rotation, set default display interval, activate library mode directly.
+- **Library tab** — manage saved items (rename, set duration, remove), toggle auto-rotation, set default display interval; each item has a **Display** button (jumps directly to that item on the matrix) and buttons to load into Image or Draw mode.
+- **Weather tab** — OpenWeatherMap API key, units, refresh interval, city carousel interval, city list management, and test-condition presets.
+- **GitHub tab** — GitHub username, contribution colour, refresh interval; Save and Display buttons.
+- **Wheel tab** — manage decision wheel choices (add by typing + Enter or clicking Add, remove with ✕); Spin button with live result display; Display Wheel button.
 - **System** — export all settings as JSON, import a previously exported JSON, restart service, stop service, disable autostart, and shutdown Pi.
 
 ## REST API
@@ -433,7 +505,9 @@ Returns current mode, brightness, full config.
 // modes: "clock", "spotify", "gameoflife", "text", "patternflow", "draw", "pomodoro", "image", "library", "weather"
 ```
 
-`reminder` is an internal temporary display mode. It is triggered by the reminders scheduler and should not normally be selected manually.
+Returns **409** if Do Not Disturb is active. Returns **400** if the mode is `"onair"` (use `/api/dnd` instead).
+
+`reminder` and `onair` are internal modes. `reminder` is triggered by the reminders scheduler; `onair` is controlled exclusively via `/api/dnd`. Neither should be set via this endpoint.
 
 ### POST /api/brightness
 ```json
@@ -458,7 +532,7 @@ Returns current mode, brightness, full config.
 Legacy `"scroll": true/false` is still accepted and maps to `"horizontal"`/`"off"`.
 
 ### GET|POST /api/config/{section}
-`section` = `clock` | `text` | `gameoflife` | `spotify` | `patternflow` | `matrix` | `carousel` | `draw` | `pomodoro` | `reminders` | `night_mode`
+`section` = `clock` | `text` | `gameoflife` | `spotify` | `patternflow` | `matrix` | `carousel` | `draw` | `pomodoro` | `reminders` | `night_mode` | `weather` | `github` | `wheel`
 
 GET returns current section config.  
 POST merges the body into that section's config.
@@ -546,14 +620,19 @@ Removes the palette with the given ID. Returns the full updated reminders config
 ### Library API
 
 ```text
-GET  /api/library                  — list items and settings
-POST /api/library/add/image        — copy current matrix image into library
-POST /api/library/add/draw         — render current draw pixels into library
-DELETE /api/library/{id}           — remove item (deletes file + config entry)
-POST /api/library/config           — update rotation_enabled, interval, item name/duration
+GET  /api/library                        — list items and settings
+POST /api/library/add/image              — copy current matrix image into library
+POST /api/library/add/draw               — render current draw pixels into library
+DELETE /api/library/{id}                 — remove item (deletes file + config entry)
+POST /api/library/config                 — update rotation_enabled, interval, item name/duration
+POST /api/library/display/{id}           — jump to a specific item in Library mode (switches to Library mode if needed)
+POST /api/image/load-from-library/{id}   — copy library item to matrix_image.png/gif and switch to Image mode
+POST /api/draw/load-from-library/{id}    — convert library item pixels into draw config and switch to Draw mode
 ```
 
 **POST /api/library/add/image** and **POST /api/library/add/draw** both accept an optional `name` field in the JSON body. `/add/draw` reads the current draw config (pixels, width, scroll, scroll_speed) at the time of the call and renders it to a PNG.
+
+**POST /api/draw/load-from-library/{id}** converts the library image to the draw pixel format. GIF items use the first frame only. Width and scroll settings are preserved from the library item's metadata.
 
 **POST /api/library/config** body:
 ```json
@@ -566,6 +645,33 @@ POST /api/library/config           — update rotation_enabled, interval, item n
 }
 ```
 Only `name` and `duration` are merged from the `items` array; file metadata is preserved.
+
+### GET|POST /api/dnd
+
+Get or toggle Do Not Disturb (ON AIR) mode.
+
+```bash
+# Check status
+curl http://pi-ip:8080/api/dnd
+# → { "enabled": false }
+
+# Enable
+curl -X POST http://pi-ip:8080/api/dnd \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled": true}'
+# → { "status": "ok", "enabled": true, "mode": "onair" }
+
+# Disable (restores previous mode)
+curl -X POST http://pi-ip:8080/api/dnd \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled": false}'
+# → { "status": "ok", "enabled": false, "mode": "clock" }
+```
+
+While DND is active:
+- `POST /api/mode` returns **409**.
+- Carousel, reminders, Pomodoro auto-return, and all internal mode-switch requests are silently suppressed.
+- The previous mode is remembered and restored on disable.
 
 ### Settings export / import
 
@@ -641,6 +747,45 @@ curl -X POST http://pi-ip:8080/api/image/upload \
 ```
 
 `ox`/`oy`: top-left of the crop rect in source-image pixels. `cropW`/`cropH`: size of the crop rect. Omit or set to `-1` to use the full frame. The server resizes each frame to 64×32 and saves the result as `static/matrix_image.gif`.
+
+### Decision Wheel API
+
+```text
+GET  /api/wheel          — current state: phase, result, choices list
+POST /api/wheel/spin     — trigger a spin; returns immediately with chosen label
+GET|POST /api/config/wheel — read or update wheel config (choices list)
+```
+
+**GET /api/wheel** response:
+```json
+{ "phase": "idle", "result": "Workout", "choices": ["Lunch", "Workout", "Task 1"] }
+```
+`phase` is one of `idle`, `spinning`, `result`, `showtext`.
+
+**POST /api/wheel/spin** response:
+```json
+{ "status": "ok", "choice": "Workout" }
+```
+`status` can be `ok`, `busy` (already spinning), or `no_choices`.
+
+The API returns the chosen label immediately so the web UI can display it before the animation finishes on the matrix.
+
+**POST /api/config/wheel** body:
+```json
+{ "choices": ["Lunch", "Workout", "Task 1", "Activity B"] }
+```
+
+### GitHub config
+
+GitHub is configured via `GET|POST /api/config/github`.
+
+| Key | Default | Description |
+|---|---|---|
+| `username` | `""` | GitHub username (public profile only, no token required) |
+| `color` | `[0, 255, 0]` | RGB colour for maximum contribution level; lower levels are scaled down |
+| `refresh_interval` | `3600` | Seconds between fetches (minimum 300) |
+
+Changing `username` via the API triggers an immediate re-fetch.
 
 ### POST /api/shutdown
 Triggers `sudo shutdown -h now` on the Pi.
