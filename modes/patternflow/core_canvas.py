@@ -2,14 +2,15 @@
 # The controller owns canvas creation and SwapOnVSync.
 # Patterns call set_pixel() then present() (present is a no-op here).
 # PatternflowMode.render() calls render_to(canvas) to push the frame.
-import numpy as np
 import logging
+
+import numpy as np
 from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-W = 64
-H = 32
+W = 128
+H = 128
 
 _diag_done = False
 
