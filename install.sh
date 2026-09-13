@@ -30,7 +30,6 @@ fi
 cd /tmp/rpi-rgb-led-matrix
 make clean
 make -j$(nproc)
-make install-python PYTHON=$(which python3)
 cd -
 
 # ── Copy project files ────────────────────────────────────────────────────────
@@ -50,6 +49,7 @@ python3 -m venv "$INSTALL_DIR/venv" --system-site-packages
   requests \
   spotipy \
   -q
+"$INSTALL_DIR/venv/bin/pip" install git+https://github.com/hzeller/rpi-rgb-led-matrix
 
 # ── sudoers for shutdown ──────────────────────────────────────────────────────
 if ! grep -q 'led-matrix-shutdown' /etc/sudoers.d/led-matrix 2>/dev/null; then
