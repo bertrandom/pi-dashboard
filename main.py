@@ -4,12 +4,13 @@ LED Matrix Controller — main entry point.
 Must run as root: sudo python3 main.py
 """
 
-import time
-import threading
+import logging
+import os
+import pprint
 import signal
 import sys
-import os
-import logging
+import threading
+import time
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,22 +34,21 @@ except ImportError:
 
 from config import Config
 from modes.clock import ClockMode
-from modes.spotify import SpotifyMode
-from modes.gameoflife import GameOfLifeMode
-from modes.text import TextMode
-from modes.patternflow import PatternflowMode
 from modes.draw import DrawMode
-from modes.pomodoro import PomodoroMode
-from modes.reminder import ReminderMode
+from modes.gameoflife import GameOfLifeMode
+from modes.github import GitHubMode
 from modes.image import ImageMode
 from modes.library import LibraryMode
-from modes.weather import WeatherMode
-from modes.workout import WorkoutMode
-from modes.onair import OnAirMode
-from modes.github import GitHubMode
-from modes.wheel import WheelMode
 from modes.monitoring import MonitoringMode
-
+from modes.onair import OnAirMode
+from modes.patternflow import PatternflowMode
+from modes.pomodoro import PomodoroMode
+from modes.reminder import ReminderMode
+from modes.spotify import SpotifyMode
+from modes.text import TextMode
+from modes.weather import WeatherMode
+from modes.wheel import WheelMode
+from modes.workout import WorkoutMode
 
 # ── Simulation canvas (dev/non-Pi use) ──────────────────────────────────────
 
@@ -108,18 +108,26 @@ class MatrixController:
             return None
 
         opts = RGBMatrixOptions()
-        opts.rows = 32
+
+        opts.rows = 64
         opts.cols = 64
-        opts.chain_length = 1
-        opts.parallel = 1
-        opts.hardware_mapping = 'adafruit-hat'
-        opts.brightness = self.config.get('brightness', 50)
-        matrix_cfg = self.config.get_section('matrix')
-        opts.gpio_slowdown = int(matrix_cfg.get('gpio_slowdown', 2))
-        opts.pwm_bits = int(matrix_cfg.get('pwm_bits', 7))
-        opts.drop_privileges = False
-        opts.disable_hardware_pulsing = bool(matrix_cfg.get('disable_hardware_pulsing', False))
-        opts.limit_refresh_rate_hz = int(matrix_cfg.get('limit_refresh_rate_hz', 0))
+        opts.chain_length = 2
+        opts.parallel = 2
+        opts.row_address_type = 0
+        opts.multiplexing = 0
+        opts.pwm_bits = 11
+        opts.brightness = 100
+        opts.pwm_lsb_nanoseconds = 130
+        opts.led_rgb_sequence = 'RGB'
+        opts.pixel_mapper_config = ''
+        opts.panel_type = ''
+        opts.pwm_dither_bits = 0
+        opts.limit_refresh_rate_hz = 0
+
+        opts.gpio_slowdown = 3
+
+        opts.drop_privileges=False
+
         logger.info(
             "Matrix options: gpio_slowdown=%s pwm_bits=%s limit_refresh_rate_hz=%s "
             "disable_hardware_pulsing=%s",
@@ -128,6 +136,7 @@ class MatrixController:
             opts.limit_refresh_rate_hz,
             opts.disable_hardware_pulsing,
         )
+
         return RGBMatrix(options=opts)
 
     def _setup_gpio(self):
