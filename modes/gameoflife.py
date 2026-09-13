@@ -1,10 +1,12 @@
-import time
 import random
+import time
+
 import numpy as np
 from PIL import Image
+
 from modes.base import BaseMode
 
-W, H = 64, 32
+W, H = 128, 128
 
 
 class GameOfLifeMode(BaseMode):
