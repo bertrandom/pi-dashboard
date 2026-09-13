@@ -2,9 +2,10 @@
 # Pattern: Origin — adapted for 64×32 panel
 # Author: Seunghun LEE  |  Port: led-matrix integration
 import math
-from .. import core_math   as pf_math
-from .. import core_color  as pf_color
+
 from .. import core_canvas as pf_canvas
+from .. import core_color as pf_color
+from .. import core_math as pf_math
 
 NAME = "Origin"
 KNOB_LABELS = ["hue", "speed", "mode", "freq"]
@@ -12,11 +13,11 @@ KNOB_LABELS = ["hue", "speed", "mode", "freq"]
 # Presets scaled to fit 64×32 (halved from the 128×64 originals).
 # Layout: (rows, cols, gap, tile_size, grid_step, grid_cells)
 _PRESETS = [
-    (1, 2, 2, 28, 4, 7),   # 2 big tiles  — totalW=62, totalH=32
-    (2, 4, 1, 13, 2, 6),   # 8 medium tiles — totalW=57, totalH=29
-    (3, 6, 1,  9, 1, 9),   # 18 small tiles — totalW=61, totalH=31
-    (3, 6, 1,  9, 3, 3),   # same layout, coarser grid
-    (4, 8, 0,  8, 2, 4),   # 32 tiny tiles, full fill — 64×32
+    (2, 2, 4, 56, 7, 8),   # 2 big tiles  — totalW=62, totalH=32
+    (4, 4, 3, 27, 3, 9),   # 8 medium tiles — totalW=57, totalH=29
+    (6, 6, 2,  18, 3, 6),   # 18 small tiles — totalW=61, totalH=31
+    (6, 6, 2,  18, 2, 9),   # same layout, coarser grid
+    (12, 12, 0,  10, 2, 5),   # 32 tiny tiles, full fill — 64×32
 ]
 
 _hue_deg = 0
@@ -84,7 +85,7 @@ def update(dt: float, inp) -> None:
 
     d = inp.knob_deltas[1]
     if d: _speed = max(0.0, min(5.0, _speed + d * 0.1))
-    if inp.btn_pressed[1]: _speed = 0.0
+    if inp.btn_pressed[1]: _speed = 2.0
 
     d = inp.knob_deltas[2]
     if d: _mode = ((_mode + int(d)) % len(_PRESETS) + len(_PRESETS)) % len(_PRESETS)
@@ -92,7 +93,7 @@ def update(dt: float, inp) -> None:
 
     d = inp.knob_deltas[3]
     if d: _freq = max(0.1, min(1000.0, _freq + d * 10.0))
-    if inp.btn_pressed[3]: _freq = 0.1
+    if inp.btn_pressed[3]: _freq = 220.0
 
     if _mode != _cur_mode:
         _apply_preset(_mode)
