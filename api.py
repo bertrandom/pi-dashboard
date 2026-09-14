@@ -4,11 +4,12 @@ All endpoints return JSON. Web UI served at /.
 """
 
 import io
-import os
-import threading
 import json as _json
+import os
 import shutil
-from flask import Flask, Response, abort, jsonify, request, render_template
+import threading
+
+from flask import Flask, Response, abort, jsonify, render_template, request
 from PIL import Image as _PILImage
 
 try:

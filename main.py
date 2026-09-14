@@ -32,6 +32,13 @@ except ImportError:
     GPIO_AVAILABLE = False
     logger.warning("RPi.GPIO not found — GPIO shutdown disabled")
 
+try:
+    from evdev import InputDevice, categorize, ecodes
+    EVDEV_AVAILABLE = True
+except ImportError:
+    EVDEV_AVAILABLE = False
+    logger.warning("evdev not found — keyboard input disabled")
+
 from config import Config
 from modes.clock import ClockMode
 from modes.draw import DrawMode
@@ -87,18 +94,26 @@ class MatrixController:
         self.current_mode_name = None
         self.modes = {name: cls(self.config) for name, cls in self.MODES.items()}
         self.running = False
+
         self._mode_lock = threading.Lock()
+
         self._carousel_thread = None
         self._carousel_stop = threading.Event()
         self._carousel_index = 0
         self._carousel_manual_until = 0.0
+
+        self._keyboard_thread = None
+        self._keyboard_stop = threading.Event()
+
         self._reminder_last_fired = {}
         self._screen_on = True
         self._last_applied_brightness = None
         self._clear_next_frame = False
         self._dnd = False
         self._dnd_return_mode = None
+
         self._setup_gpio()
+        self._setup_keyboard()
         self._apply_auto_brightness()
         self.set_mode(self.config.get('mode', 'clock'))
         self._start_carousel()
@@ -126,7 +141,7 @@ class MatrixController:
 
         opts.gpio_slowdown = 3
 
-        opts.drop_privileges=False
+        opts.drop_privileges = False
 
         logger.info(
             "Matrix options: gpio_slowdown=%s pwm_bits=%s limit_refresh_rate_hz=%s "
@@ -142,12 +157,15 @@ class MatrixController:
     def _setup_gpio(self):
         if not GPIO_AVAILABLE:
             return
+
         pin = self.config.get('shutdown_gpio', 21)
+
         try:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
             GPIO.add_event_detect(
-                pin, GPIO.FALLING,
+                pin,
+                GPIO.FALLING,
                 callback=self._gpio_press,
                 bouncetime=200,
             )
@@ -157,13 +175,162 @@ class MatrixController:
 
     def _gpio_press(self, channel):
         press_start = time.time()
+
         while GPIO_AVAILABLE and GPIO.input(channel) == GPIO.LOW:
             held = time.time() - press_start
+
             if held >= 3.0:
                 logger.info("Long press → shutdown")
                 self.trigger_shutdown()
                 return
+
             time.sleep(0.05)
+
+    # ── Keyboard ─────────────────────────────────────────────────────────────
+
+    def _setup_keyboard(self):
+        if not EVDEV_AVAILABLE:
+            return
+
+        device_path = '/dev/input/by-id/usb-Binepad_KnobX1_vial:f64c2b3c-event-kbd'
+
+        try:
+            device = InputDevice(device_path)
+
+            logger.info(
+                "Keyboard connected: %s (%s)",
+                device.name,
+                device.path,
+            )
+
+            self._keyboard_stop.clear()
+            self._keyboard_thread = threading.Thread(
+                target=self._keyboard_loop,
+                args=(device,),
+                daemon=True,
+                name='keyboard',
+            )
+            self._keyboard_thread.start()
+
+        except Exception as e:
+            logger.warning(f"Keyboard setup failed: {e}")
+
+    def _keyboard_loop(self, device):
+        logger.info("Keyboard listener started")
+
+        try:
+            for event in device.read_loop():
+                if self._keyboard_stop.is_set():
+                    break
+
+                if event.type != ecodes.EV_KEY:
+                    continue
+
+                key_event = categorize(event)
+
+                # 0 = key up
+                # 1 = key down
+                # 2 = key repeat
+                #
+                # Only respond to the initial key-down event.
+                if key_event.keystate != 1:
+                    continue
+
+                self._keyboard_press(key_event.keycode)
+
+        except Exception as e:
+            if not self._keyboard_stop.is_set():
+                logger.error(f"Keyboard error: {e}")
+
+        finally:
+            device.close()
+
+        logger.info("Keyboard listener stopped")
+
+    def _keyboard_press(self, key):
+        if key == 'KEY_Q':
+            self._set_mode_to_patternflow()
+            self._patternflow_prev()
+        elif key == 'KEY_E':
+            self._set_mode_to_patternflow()
+            self._patternflow_next()
+        elif key == 'KEY_W':
+            self._toggle_mode_from_patternflow_to_gameoflife()
+
+        elif key == 'KEY_A':
+            self._patternflow_knob_delta(0, -1)
+        elif key == 'KEY_S':
+            self._patternflow_knob_button(0)
+        elif key == 'KEY_D':
+            self._patternflow_knob_delta(0, 1)
+
+        elif key == 'KEY_Z':
+            self._patternflow_knob_delta(1, -1)
+        elif key == 'KEY_X':
+            self._patternflow_knob_button(1)
+        elif key == 'KEY_C':
+            self._patternflow_knob_delta(1, 1)
+
+        elif key == 'KEY_F':
+            self._patternflow_knob_delta(2, -1)
+        elif key == 'KEY_G':
+            self._patternflow_knob_button(2)
+        elif key == 'KEY_H':
+            self._patternflow_knob_delta(2, 1)
+
+        elif key == 'KEY_V':
+            self._patternflow_knob_delta(3, -1)
+        elif key == 'KEY_N':
+            self._patternflow_knob_button(3)
+        elif key == 'KEY_B':
+            self._patternflow_knob_delta(3, 1)
+
+
+
+    def _set_mode_to_patternflow(self):
+        logger.info(f"Keyboard: q → mode patternflow")
+        if (self.get_mode() != 'patternflow'):
+            self.set_mode('patternflow')
+
+    def _patternflow_prev(self):
+        pf = self.modes.get('patternflow')
+        names = pf.get_pattern_names()
+
+        current_pattern = pf.get_current_pattern()
+        new_index = current_pattern['index'] - 1
+        if new_index < 0:
+            new_index = len(names) - 1
+
+        pf.set_pattern(new_index)
+
+    def _patternflow_next(self):
+        pf = self.modes.get('patternflow')
+        names = pf.get_pattern_names()
+
+        current_pattern = pf.get_current_pattern()
+        new_index = current_pattern['index'] + 1
+        if new_index >= len(names):
+            new_index = 0
+
+        pf.set_pattern(new_index)
+
+    def _patternflow_knob_delta(self, knob_index, delta):
+        self._set_mode_to_patternflow()
+        pf = self.modes.get('patternflow')
+        pf.web_knob(knob_index, delta)
+
+    def _patternflow_knob_button(self, knob_index):
+        self._set_mode_to_patternflow()
+        pf = self.modes.get('patternflow')
+        pf.web_button(knob_index)
+
+    def _toggle_mode_from_patternflow_to_gameoflife(self):
+        if self.get_mode() == 'patternflow':
+            logger.info(f"Keyboard: w → mode gameoflife")
+            self.set_mode('gameoflife')
+        else:
+            logger.info(f"Keyboard: w → mode patternflow")
+            self.set_mode('patternflow')
 
     # ── Mode management ──────────────────────────────────────────────────────
 
@@ -171,22 +338,30 @@ class MatrixController:
         if name not in self.modes:
             logger.error(f"Unknown mode '{name}'")
             return False
+
         if self._dnd and name != 'onair':
             logger.debug(f"set_mode '{name}' blocked by DND")
             return False
+
         if manual:
             self._carousel_manual_until = time.monotonic() + 1.0
+
         with self._mode_lock:
             if self.current_mode:
                 self.current_mode.stop()
+
             self.current_mode = self.modes[name]
             self.current_mode_name = name
+
             if kwargs:
                 self.config.set_section(name, kwargs)
+
             self.current_mode.start()
             self._clear_next_frame = True
+
         self.config.set('mode', name)
         logger.info(f"Mode → {name}")
+
         return True
 
     def get_mode(self):
@@ -195,6 +370,7 @@ class MatrixController:
     def enable_dnd(self):
         if self._dnd:
             return
+
         self._dnd_return_mode = self.get_mode()
         self._dnd = True
         self.set_mode('onair', manual=True)
@@ -203,6 +379,7 @@ class MatrixController:
     def disable_dnd(self):
         if not self._dnd:
             return
+
         self._dnd = False
         return_mode = self._dnd_return_mode or 'clock'
         self._dnd_return_mode = None
@@ -225,19 +402,24 @@ class MatrixController:
     @staticmethod
     def _reminder_id(reminder):
         rid = str(reminder.get('id', '') or '').strip()
+
         if rid:
             return rid
+
         return f"{reminder.get('time', '')}|{reminder.get('text', '')}"
 
     def _check_reminders(self):
         if self.get_mode() == 'reminder':
             return
+
         if self._dnd:
             return
+
         if not self._screen_on:
             return
 
         cfg = self.config.get_section('reminders')
+
         if not bool(cfg.get('enabled', False)):
             return
 
@@ -248,17 +430,21 @@ class MatrixController:
         for reminder in cfg.get('items', []):
             if not bool(reminder.get('enabled', True)):
                 continue
+
             if str(reminder.get('time', '')).strip() != current_time:
                 continue
 
             rid = self._reminder_id(reminder)
+
             if self._reminder_last_fired.get(rid) == today:
                 continue
 
             return_mode = self.get_mode()
             mode = self.modes.get('reminder')
+
             if not mode:
                 return
+
             mode.show(reminder, return_mode)
             self._reminder_last_fired[rid] = today
             self.set_mode('reminder', manual=False)
@@ -270,10 +456,12 @@ class MatrixController:
             value = durations.get(mode_name, 30)
         except AttributeError:
             value = 30
+
         return max(2, min(3600, int(value or 30)))
 
     def _start_carousel(self):
         self._carousel_stop.clear()
+
         self._carousel_thread = threading.Thread(
             target=self._carousel_loop,
             daemon=True,
@@ -283,29 +471,39 @@ class MatrixController:
 
     def _carousel_loop(self):
         last_switch = time.monotonic()
+
         while not self._carousel_stop.wait(0.5):
             enabled, selected, durations = self._carousel_cfg()
+
             if not enabled or len(selected) < 2:
                 last_switch = time.monotonic()
                 continue
+
             now = time.monotonic()
+
             if now < self._carousel_manual_until:
                 last_switch = now
                 continue
+
             # Hold carousel while a workout is in progress
             workout_mode = self.modes.get('workout')
+
             if workout_mode and workout_mode.is_active():
                 last_switch = now
                 continue
+
             # Hold carousel while a reminder is displaying
             if self.get_mode() == 'reminder':
                 last_switch = now
                 continue
+
             interval = self._carousel_duration(self.get_mode(), durations)
+
             if now - last_switch < interval:
                 continue
 
             current = self.get_mode()
+
             if current in selected:
                 next_idx = (selected.index(current) + 1) % len(selected)
             else:
@@ -314,15 +512,20 @@ class MatrixController:
             # Skip spotify when idle if that option is enabled
             carousel_cfg = self.config.get_section('carousel')
             skip_idle = bool(carousel_cfg.get('skip_spotify_if_idle', False))
+
             if skip_idle and 'spotify' in selected:
                 spotify_mode = self.modes.get('spotify')
+
                 # Walk forward past spotify when nothing is playing, but never
                 # skip it when the user landed on it manually.
                 attempts = 0
-                while (selected[next_idx] == 'spotify'
-                       and spotify_mode
-                       and not spotify_mode.is_playing()
-                       and attempts < len(selected)):
+
+                while (
+                    selected[next_idx] == 'spotify'
+                    and spotify_mode
+                    and not spotify_mode.is_playing()
+                    and attempts < len(selected)
+                ):
                     next_idx = (next_idx + 1) % len(selected)
                     attempts += 1
 
@@ -338,29 +541,49 @@ class MatrixController:
 
     def night_mode_active(self) -> bool:
         cfg = self.config.get_section('night_mode')
+
         if not cfg.get('enabled'):
             return False
+
         now = time.localtime()
         current = now.tm_hour * 60 + now.tm_min
+
         try:
-            sh, sm = map(int, str(cfg.get('start', '22:00')).split(':'))
-            eh, em = map(int, str(cfg.get('end', '05:00')).split(':'))
+            sh, sm = map(
+                int,
+                str(cfg.get('start', '22:00')).split(':'),
+            )
+            eh, em = map(
+                int,
+                str(cfg.get('end', '05:00')).split(':'),
+            )
         except Exception:
             return False
+
         start_min = sh * 60 + sm
         end_min = eh * 60 + em
+
         if start_min <= end_min:
             return start_min <= current < end_min
+
         return current >= start_min or current < end_min
 
     def _apply_auto_brightness(self):
         if not self.matrix:
             return
+
         if self.night_mode_active():
             cfg = self.config.get_section('night_mode')
-            target = max(1, min(100, int(cfg.get('brightness', 20))))
+            target = max(
+                1,
+                min(100, int(cfg.get('brightness', 20))),
+            )
         else:
-            target = max(1, min(100, int(self.config.get('brightness', 50))))
+            target = max(
+                1,
+                min(100, int(self.config.get('brightness', 50))),
+            )
+
         if self._last_applied_brightness != target:
             self.matrix.brightness = target
             self._last_applied_brightness = target
@@ -392,20 +615,24 @@ class MatrixController:
             perf_swap_s = 0.0
             perf_last_log = time.monotonic()
             brightness_check_t = 0.0
+
             while self.running:
                 self._check_reminders()
 
                 now_t = time.monotonic()
+
                 if now_t - brightness_check_t >= 30.0:
                     self._apply_auto_brightness()
                     brightness_check_t = now_t
 
                 if not self._screen_on:
                     canvas.Clear()
+
                     if self.matrix:
                         canvas = self.matrix.SwapOnVSync(canvas)
                     else:
                         time.sleep(0.033)
+
                     continue
 
                 if self._clear_next_frame:
@@ -413,21 +640,27 @@ class MatrixController:
                     self._clear_next_frame = False
 
                 render_start = time.monotonic()
+
                 with self._mode_lock:
                     mode = self.current_mode
+
                     if mode:
                         try:
                             mode.render(canvas)
                         except Exception as e:
                             logger.error(f"Render error: {e}")
+
                 render_end = time.monotonic()
 
                 requested_mode = None
+
                 if mode and hasattr(mode, 'consume_requested_mode'):
                     try:
                         requested_mode = mode.consume_requested_mode()
                     except Exception as e:
-                        logger.warning(f"Mode switch request error: {e}")
+                        logger.warning(
+                            f"Mode switch request error: {e}"
+                        )
 
                 if self.matrix:
                     swap_start = time.monotonic()
@@ -444,9 +677,12 @@ class MatrixController:
                 perf_frames += 1
                 perf_render_s += render_end - render_start
                 perf_swap_s += swap_end - swap_start
+
                 now = time.monotonic()
+
                 if now - perf_last_log >= 5.0:
                     total_s = max(0.001, now - perf_last_log)
+
                     logger.info(
                         "Perf: mode=%s fps=%.1f render_ms=%.1f swap_ms=%.1f frames=%d",
                         self.current_mode_name,
@@ -455,6 +691,7 @@ class MatrixController:
                         perf_swap_s * 1000.0 / max(1, perf_frames),
                         perf_frames,
                     )
+
                     perf_frames = 0
                     perf_render_s = 0.0
                     perf_swap_s = 0.0
@@ -462,23 +699,30 @@ class MatrixController:
 
         except KeyboardInterrupt:
             pass
+
         finally:
             self._cleanup()
 
     def _cleanup(self):
         self.running = False
+
         self._carousel_stop.set()
+        self._keyboard_stop.set()
+
         with self._mode_lock:
             if self.current_mode:
                 self.current_mode.stop()
+
         if self.matrix:
             self.matrix.Clear()
             time.sleep(0.15)  # give refresh thread time to push blank frame
+
         if GPIO_AVAILABLE:
             try:
                 GPIO.cleanup()
             except Exception:
                 pass
+
         logger.info("Controller stopped")
 
     def trigger_shutdown(self):
@@ -504,9 +748,18 @@ if __name__ == '__main__':
     flask_app = create_app(get_controller)
 
     def _run_api():
-        flask_app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+        flask_app.run(
+            host='0.0.0.0',
+            port=8080,
+            debug=False,
+            use_reloader=False,
+        )
 
-    api_thread = threading.Thread(target=_run_api, daemon=True, name='api')
+    api_thread = threading.Thread(
+        target=_run_api,
+        daemon=True,
+        name='api',
+    )
     api_thread.start()
 
     def _sig(sig, frame):

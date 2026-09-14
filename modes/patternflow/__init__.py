@@ -15,15 +15,16 @@ Set any pin to -1 to mark it unconnected. If no GPIO is available the mode
 falls back to web-only control.
 """
 
-import time
 import logging
 import threading
+import time
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from modes.base import BaseMode
-from . import core_canvas  as pf_canvas
+
+from . import core_canvas as pf_canvas
 from . import core_encoders as pf_enc
 from .registry import PATTERNS
 
@@ -250,13 +251,13 @@ class PatternflowMode(BaseMode):
 
         # Overlays drawn directly on canvas (on top of SetImage result)
         overlay_start = time.monotonic()
-        if self._content_notice > 0.0:
-            self._draw_notice(canvas, pat.NAME)
-            self._content_notice -= dt
+        # if self._content_notice > 0.0:
+        #     self._draw_notice(canvas, pat.NAME)
+        #     self._content_notice -= dt
 
-        if self._app_mode == _MODE_SELECTING:
-            self._draw_select_overlay(canvas, pat.NAME)
-        elif self._show_fps:
+        # if self._app_mode == _MODE_SELECTING:
+        #     self._draw_select_overlay(canvas, pat.NAME)
+        if self._show_fps:
             self._draw_fps(canvas)
         overlay_s = time.monotonic() - overlay_start
         self._record_perf(pat, update_s, draw_s, push_s, overlay_s)
