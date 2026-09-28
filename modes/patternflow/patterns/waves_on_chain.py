@@ -56,7 +56,7 @@ _PALETTES = [
     ("#000000", "#F4FAFF", "#FFFFFF", "#A3A3A3"),
 ]
 
-_DEFAULT_TOKEN = 494
+_DEFAULT_TOKEN = 501
 
 _REF   = 1000.0   # reference canvas size the p5 pixel constants assume
 _SS    = 4        # supersampling factor for anti-aliased edges
