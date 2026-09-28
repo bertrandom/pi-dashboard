@@ -1,89 +1,219 @@
-# Pattern: Waves on Chain #494
+# Pattern: Waves on Chain
 # Original: "Waves on chain" by Chromalita (https://twitter.com/chromalita),
-# published by Chromorphs. Ported from the p5.js source for token #494.
+# published by Chromorphs. Ported from the p5.js source.
 #
-# The original draws each wave as a p5 curveVertex() shape at the viewer's
-# window size. We replay the same Catmull-Rom geometry in a fixed reference
-# space, rasterise it supersampled with PIL, and alpha-composite in numpy.
-import math
+# Every token of the collection runs the same sketch; the token's hash seeds
+# an xorshift RNG that picks the palette, opacity, wave height/spacing/shape,
+# background style and stars. We replay that RNG so the token knob shows any
+# of the 1024 outputs, then replay the sketch's Catmull-Rom geometry in a
+# fixed reference space, rasterise supersampled with PIL, and composite in numpy.
+import logging
 
 import numpy as np
 from PIL import Image, ImageDraw
 
 from .. import core_canvas as pf_canvas
+from .waves_on_chain_seeds import SEEDS
+
+logger = logging.getLogger(__name__)
 
 NAME = "Waves on Chain"
-KNOB_LABELS = ["speed", "height", "spacing", "amp"]
+KNOB_LABELS = ["token", "speed", "palette", "amp"]
 
-# Token #494 parameters, taken from the original's xorshift RNG seeded with
-# hash 0x5f7c6d0920705db7…  (palette "Island sunset", reversed).
-_BG_TOP    = (0x00, 0x4E, 0x98)   # palette[0]
-_STROKE    = (0x00, 0x4E, 0x98)   # palette[1]
-_FILL      = (0xFF, 0x85, 0x33)   # palette[2]
-_BG_BOTTOM = (0xAD, 0xD8, 0xFF)   # palette[3]
-_ALPHA     = 0x74 / 255.0         # op=74, appended to the hex colour strings
-_STROKE_W  = 1.4128               # sW
-_Y_H       = 0.5256               # yH: first wave's baseline, fraction of height
-_DIST      = 8.624                # dist: wave spacing, percent of height
-_FREQ      = 44.92                # freq: vertex step (px) and time divisor
-_FREQ2     = 24.125
-_SIN_AMP   = 51.5
-_AMP       = 14.926
-_AMP2      = 13.086
+# (primary/background, stroke, wave fill, secondary/gradient end), verbatim
+_PALETTES = [
+    ("#BF160D", "#B73E15", "#F56416", "#F00699"),
+    ("#F56416", "#B73E15", "#BF160D", "#F00699"),
+    ("#F56416", "#D36060", "#E8B321", "#D00000"),
+    ("#E8B321", "#E8B321", "#D00000", "#F56416"),
+    ("#119DA4", "#119DA4", "#155145", "#042325"),
+    ("#155145", "#155145", "#119DA4", "#130208"),
+    ("#0A2342", "#7D77CF", "#9893DA", "#000000"),
+    ("#9893DA", "#7D77CF", "#0A2342", "#C5FFFD"),
+    ("#6E0E0A", "#6E0E0A", "#FF8552", "#130208"),
+    ("#FF8552", "#FF8552", "#6E0E0A", "#6E0E0A"),
+    ("#FF8533", "#FF8533", "#004E98", "#DB162F"),
+    ("#004E98", "#004E98", "#FF8533", "#ADD8FF"),
+    ("#FFE156", "#FFE156", "#DC7F9B", "#DD614A"),
+    ("#DC7F9B", "#DC7F9B", "#FFE156", "#EA1F4B"),
+    ("#130201", "#130201", "#EF271B", "#666666"),
+    ("#BF160D", "#BF160D", "#130201", "#130201"),
+    ("#F45B69", "#141D29", "#114B5F", "#FF206E"),
+    ("#114B5F", "#141D29", "#F45B69", "#16CAB2"),
+    ("#DC3F2E", "#DC3F2E", "#1B2CC1", "#FF0A58"),
+    ("#1B2CC1", "#1B2CC1", "#DC3F2E", "#080C36"),
+    ("#E87EA1", "#DA2F68", "#98C1D9", "#AD1F4E"),
+    ("#98C1D9", "#DA2F68", "#E87EA1", "#FFFFfF"),
+    ("#FDEFED", "#FFFFFF", "#002922", "#002922"),
+    ("#002922", "#FFFFFF", "#FDEFED", "#000000"),
+    ("#60063F", "#74074C", "#06BCC1", "#F218A2"),
+    ("#06BCC1", "#6D466B", "#74074C", "#60063F"),
+    ("#8A1C7C", "#8A1C7C", "#DA4167", "#CF1259"),
+    ("#DA4167", "#DA4167", "#8A1C7C", "#DC56CA"),
+    ("#72E3FD", "#C2F3FE", "#1FB1D6", "#FFFFFF"),
+    ("#1FB1D6", "#1FB1D6", "#C2F3FE", "#0D4A59"),
+    ("#FFFFFF", "#000000", "#000000", "#2F2F2F"),
+    ("#000000", "#F4FAFF", "#FFFFFF", "#A3A3A3"),
+]
+
+_DEFAULT_TOKEN = 494
 
 _REF   = 1000.0   # reference canvas size the p5 pixel constants assume
 _SS    = 4        # supersampling factor for anti-aliased edges
 _SEG_STEPS = 8    # samples per Bezier segment
 _FPS   = 60.0     # p5 frameCount rate
 
+
+class _Random:
+    """The sketch's xorshift RNG, with JS int32 bitwise semantics."""
+
+    def __init__(self, seed: int):
+        self.seed = seed
+
+    @staticmethod
+    def _i32(v: int) -> int:
+        return (v + 0x80000000) % 0x100000000 - 0x80000000
+
+    def random_dec(self) -> float:
+        s = self.seed
+        s = self._i32(s ^ (s << 13))
+        s = s ^ (s >> 17)
+        s = self._i32(s ^ (s << 5))
+        self.seed = s
+        return (abs(s) % 1000) / 1000
+
+    def random_between(self, a: float, b: float) -> float:
+        return a + (b - a) * self.random_dec()
+
+    def random_int(self, a: int, b: int) -> int:
+        return int(self.random_between(a, b + 1) // 1)
+
+    def random_choice_index(self, n: int) -> int:
+        return int(self.random_between(0, n * 0.99) // 1)
+
+
+class _Params:
+    """Token traits, drawn from the RNG in the same order as the sketch."""
+
+    def __init__(self, token: int):
+        rng = _Random(SEEDS[token])
+        self.palette = rng.random_choice_index(len(_PALETTES))
+        self.op = rng.random_int(50, 80)
+        self.sw = rng.random_between(0.1, 2.5)
+        self.y_h = rng.random_between(0.3, 0.6)
+        self.dist = rng.random_between(2, 20)
+        self.freq = rng.random_between(10, 50)
+        self.freq2 = rng.random_between(15, 40)
+        self.sin_amp = rng.random_between(40, 140)
+        self.amp = rng.random_between(2, 25)
+        self.amp2 = rng.random_between(2, 25)
+        self.single_wave = rng.random_between(0, 100) > 99
+        self.background = rng.random_between(0, 100)
+        self.num_stars = rng.random_int(5, 8)
+        # (diameter, x, y) — diameter in 1/500ths, position in percent
+        self.stars = [(rng.random_int(2, 10), rng.random_int(10, 90), rng.random_int(10, 30))
+                      for _ in range(8)]
+
+
+_token = _DEFAULT_TOKEN
+_palette_shift = 0
 _speed = 1.0
-_y_h = _Y_H
-_dist = _DIST
-_sin_amp = _SIN_AMP
+_amp_scale = 1.0
 _frame = 0.0
 
+_p: _Params
 _bg: np.ndarray
-_bez_t: np.ndarray
+_fill: np.ndarray
+_fill_alpha = 1.0
+_stroke: np.ndarray
+_stroke_alpha = 1.0
+_bez_t = np.linspace(0.0, 1.0, _SEG_STEPS + 1, dtype=np.float32)[1:, None]
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def _rgb(hex_str: str) -> np.ndarray:
+    v = int(hex_str.lstrip('#'), 16)
+    return np.array([(v >> 16) & 255, (v >> 8) & 255, v & 255], dtype=np.float32)
+
+
+def _new_mask() -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    size = pf_canvas.W * _SS
+    mask = Image.new('L', (size, size), 0)
+    return mask, ImageDraw.Draw(mask)
+
+
+def _mask_coverage(mask: Image.Image) -> np.ndarray:
+    small = mask.resize((pf_canvas.W, pf_canvas.H), Image.BOX)
+    return np.asarray(small, dtype=np.float32)[:, :, None] / 255.0
+
+
+def _apply_token():
+    """Rebuild colours and the static background (gradient/solid + stars)."""
+    global _p, _bg, _fill, _fill_alpha, _stroke, _stroke_alpha
+    _p = _Params(_token)
+    primary, s_color, w_color, secondary = _PALETTES[(_p.palette + _palette_shift) % len(_PALETTES)]
+    # The sketch appends the decimal opacity to the hex string, so op=74 means 0x74
+    op_alpha = int(str(_p.op), 16) / 255.0
+
+    c1 = _rgb(primary)
+    if 60 <= _p.background < 79.5 or _p.background >= 99:
+        # setGradient(): lerpColor from primary at the top to secondary at the bottom
+        t = np.linspace(0.0, 1.0, pf_canvas.H, dtype=np.float32)[:, None, None]
+        bg = c1 + (_rgb(secondary) - c1) * t
+    else:
+        bg = c1[None, None, :]
+    bg = np.broadcast_to(bg, (pf_canvas.H, pf_canvas.W, 3)).copy()
+
+    if _p.background >= 79.5:
+        mask, draw = _new_mask()
+        scale = pf_canvas.W * _SS / _REF
+        for d, x, y in _p.stars[:_p.num_stars]:
+            cx, cy, r = x / 100 * _REF * scale, y / 100 * _REF * scale, d / 1000 * _REF * scale
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
+        bg += (_rgb(w_color) - bg) * _mask_coverage(mask)
+    _bg = bg
+
+    _fill = _rgb(w_color)
+    _fill_alpha = 1.0 if _p.single_wave else op_alpha
+    _stroke = _rgb(s_color)
+    _stroke_alpha = op_alpha
+    logger.info("Waves on Chain: token #%d, palette %d%s", _token,
+                (_p.palette + _palette_shift) % len(_PALETTES),
+                " (single wave)" if _p.single_wave else "")
+
+
 def setup():
-    global _speed, _y_h, _dist, _sin_amp, _frame, _bg, _bez_t
-    _speed = 1.0; _y_h = _Y_H; _dist = _DIST; _sin_amp = _SIN_AMP; _frame = 0.0
-
-    # setGradient(): lerpColor from palette[0] at the top to palette[3] at the bottom
-    t = np.linspace(0.0, 1.0, pf_canvas.H, dtype=np.float32)[:, None, None]
-    top = np.array(_BG_TOP, dtype=np.float32)
-    bot = np.array(_BG_BOTTOM, dtype=np.float32)
-    _bg = np.broadcast_to(top + (bot - top) * t, (pf_canvas.H, pf_canvas.W, 3)).copy()
-
-    _bez_t = np.linspace(0.0, 1.0, _SEG_STEPS + 1, dtype=np.float32)[1:, None]
+    global _token, _palette_shift, _speed, _amp_scale, _frame
+    _token = _DEFAULT_TOKEN; _palette_shift = 0; _speed = 1.0; _amp_scale = 1.0; _frame = 0.0
+    _apply_token()
 
 
 def update(dt: float, inp) -> None:
-    global _speed, _y_h, _dist, _sin_amp, _frame
-    if inp.knob_deltas[0]: _speed = _clamp(_speed + inp.knob_deltas[0] * 0.1, 0.0, 5.0)
-    if inp.btn_pressed[0]: _speed = 1.0
-    if inp.knob_deltas[1]: _y_h = _clamp(_y_h + inp.knob_deltas[1] * 0.02, 0.1, 0.9)
-    if inp.btn_pressed[1]: _y_h = _Y_H
-    if inp.knob_deltas[2]: _dist = _clamp(_dist + inp.knob_deltas[2] * 0.5, 2.0, 30.0)
-    if inp.btn_pressed[2]: _dist = _DIST
-    # sinAmp divides the amplitude, so turning clockwise shrinks it; invert the knob
-    if inp.knob_deltas[3]: _sin_amp = _clamp(_sin_amp - inp.knob_deltas[3] * 4.0, 15.0, 200.0)
-    if inp.btn_pressed[3]: _sin_amp = _SIN_AMP
+    global _token, _palette_shift, _speed, _amp_scale, _frame
+    token, shift = _token, _palette_shift
+    if inp.knob_deltas[0]: _token = (_token + inp.knob_deltas[0]) % len(SEEDS)
+    if inp.btn_pressed[0]: _token = _DEFAULT_TOKEN
+    if inp.knob_deltas[1]: _speed = _clamp(_speed + inp.knob_deltas[1] * 0.1, 0.0, 5.0)
+    if inp.btn_pressed[1]: _speed = 1.0
+    if inp.knob_deltas[2]: _palette_shift = (_palette_shift + inp.knob_deltas[2]) % len(_PALETTES)
+    if inp.btn_pressed[2]: _palette_shift = 0
+    if inp.knob_deltas[3]: _amp_scale = _clamp(_amp_scale + inp.knob_deltas[3] * 0.1, 0.0, 3.0)
+    if inp.btn_pressed[3]: _amp_scale = 1.0
+    if (_token, _palette_shift) != (token, shift):
+        _apply_token()
     _frame += dt * _FPS * _speed
 
 
 def _wave_path(y: float, i: float) -> np.ndarray:
     """Replicates one waves() shape: vertex list + p5's Catmull-Rom endShape(CLOSE)."""
     w = h = _REF
-    xs = np.arange(-150.0, w + 150.0, _FREQ)
-    ys = y + w / _sin_amp * (
-        np.sin(-0.5 * xs / w * _AMP + _frame / _FREQ) +
-        np.sin(-0.7 * xs / w * _AMP2 + _frame / _FREQ2)
+    xs = np.arange(-150.0, w + 150.0, _p.freq)
+    ys = y + w / _p.sin_amp * _amp_scale * (
+        np.sin(-0.5 * xs / w * _p.amp + _frame / _p.freq) +
+        np.sin(-0.7 * xs / w * _p.amp2 + _frame / _p.freq2)
     )
     v = np.concatenate([
         [[-150.0, h], [-150.0, y]],
@@ -105,34 +235,28 @@ def _wave_path(y: float, i: float) -> np.ndarray:
 
 
 def _coverage(path: np.ndarray, fill: bool) -> np.ndarray:
-    size = pf_canvas.W * _SS
-    scale = size / _REF
-    mask = Image.new('L', (size, size), 0)
-    draw = ImageDraw.Draw(mask)
+    mask, draw = _new_mask()
+    scale = pf_canvas.W * _SS / _REF
     pts = [tuple(p) for p in (path * scale).tolist()]
     if fill:
         draw.polygon(pts, fill=255)
     else:
-        width = max(1, round(_STROKE_W * scale))
+        width = max(1, round(_p.sw * scale))
         draw.line(pts + [pts[0]], fill=255, width=width)
-    small = mask.resize((pf_canvas.W, pf_canvas.H), Image.BOX)
-    return np.asarray(small, dtype=np.float32)[:, :, None] * (_ALPHA / 255.0)
+    return _mask_coverage(mask)
 
 
 def draw() -> None:
     out = _bg.copy()
-    fill = np.array(_FILL, dtype=np.float32)
-    stroke = np.array(_STROKE, dtype=np.float32)
+    step = 100.0 if _p.single_wave else _p.dist
 
-    y = _REF * _y_h
+    y = _REF * _p.y_h
     i = 1.0
     while y <= _REF:
         path = _wave_path(y, i)
-        a = _coverage(path, fill=True)
-        out += (fill - out) * a
-        a = _coverage(path, fill=False)
-        out += (stroke - out) * a
-        y += (_REF / 100.0) * _dist * i
+        out += (_fill - out) * (_coverage(path, fill=True) * _fill_alpha)
+        out += (_stroke - out) * (_coverage(path, fill=False) * _stroke_alpha)
+        y += (_REF / 100.0) * step * i
         i += 0.2
 
     pf_canvas.blit(out.astype(np.uint8))
