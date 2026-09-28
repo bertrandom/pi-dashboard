@@ -763,8 +763,11 @@ if __name__ == '__main__':
     api_thread.start()
 
     def _sig(sig, frame):
+        # Handlers run on the main thread, which may be mid-render holding
+        # _mode_lock. Don't clean up here (that would deadlock re-acquiring
+        # it); raise SystemExit so the stack unwinds, the lock is released,
+        # and run()'s finally performs the cleanup.
         logger.info(f"Signal {sig} received")
-        controller._cleanup()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _sig)
