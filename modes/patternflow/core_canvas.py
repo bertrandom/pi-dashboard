@@ -53,6 +53,11 @@ def set_pixel(x: int, y: int, r: int, g: int, b: int):
         _buffer[y, x, 2] = b
 
 
+def blit(frame: np.ndarray):
+    """Copy a whole (H, W, 3) uint8 frame into the buffer in one shot."""
+    _buffer[:] = frame
+
+
 def present():
     """No-op: controller calls render_to() instead of patterns triggering swap."""
     pass
