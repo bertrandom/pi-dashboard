@@ -1,3 +1,4 @@
+from . import community
 from .patterns import (origin, pattern001, pattern002, pattern003, pattern004,
                        pattern005, pattern006, pattern007, pattern008,
                        pattern009, pattern010, pattern011, pattern012,
@@ -22,4 +23,5 @@ PATTERNS = [
     # pattern012,
     # patterndonut,
     waves_on_chain,
+    *community.PATTERNS,
 ]

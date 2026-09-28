@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw, ImageFont
 from modes.base import BaseMode
 
 from . import core_canvas as pf_canvas
+from . import community
 from . import core_encoders as pf_enc
 from .registry import PATTERNS
 
@@ -117,6 +118,7 @@ class PatternflowMode(BaseMode):
                     f"encoders={'ok' if self._enc_ok else 'disabled'}")
 
     def stop(self):
+        community.shutdown()
         if self._enc_ok:
             pf_enc.cleanup_encoders()
             self._enc_ok = False
