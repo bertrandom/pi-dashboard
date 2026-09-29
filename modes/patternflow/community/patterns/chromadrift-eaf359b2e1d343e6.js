@@ -169,7 +169,7 @@ function stepAttractor(dt, params) {
 
 export function setup(params) {
     params.w = 128;
-    params.h = 64;
+    params.h = 128;
     const size = params.w * params.h;
 
     params.densityBuf = new Float32Array(size);

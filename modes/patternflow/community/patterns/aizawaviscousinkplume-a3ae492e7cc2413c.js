@@ -22,7 +22,7 @@
 */
 
 export function setup(params) {
-  const W = 64;
+  const W = 128;
   const H = 128;
   params.w = W;
   params.h = H;
@@ -128,8 +128,8 @@ export function update(dt, input, params) {
     params.pz[i] = z;
 
     // Splat a 3x3 soft cross kernel for thick, visceral volumetric weight
-    const cx = Math.floor((x + 1.55) * 20.5);
-    const cy = Math.floor((2.6 - z) * 44.0);
+    const cx = Math.floor((x + 1.55) * 20.5 * W / 64);   // projection authored for 64x128
+    const cy = Math.floor((2.6 - z) * 44.0 * H / 128);
 
     if (cx >= 0 && cx < W && cy >= 0 && cy < H) {
       const idx = cy * W + cx;

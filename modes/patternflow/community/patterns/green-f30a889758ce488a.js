@@ -17,7 +17,7 @@
 // Knob 4 = PoreScale (Lattice grain packing density)
 
 export function setup(params) {
-  const W = 64;
+  const W = 128;
   const H = 128;
   params.W = W;
   params.H = H;

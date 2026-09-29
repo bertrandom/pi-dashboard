@@ -12,7 +12,7 @@ export function setup(params) {
   params.ptsX = new Float32Array(100);
   params.ptsY = new Float32Array(100);
   params.headX = 64;
-  params.headY = 32;
+  params.headY = 64;
   params.velX = 0;
   params.velY = 0;
   params.t = 0;
@@ -40,7 +40,7 @@ export function update(dt, input, params) {
 
   const chaos = params.k[1];
   const w = 128;
-  const h = 64;
+  const h = 128;
 
   // 1. Physics: Spring Attractor with Jitter
   const targetX = (w/2) + Math.sin(params.t * 0.8) * Math.cos(params.t * 0.4) * (w * 0.4);

@@ -57,7 +57,7 @@ function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
 
 // Patternflow's matrix is a fixed 128x64 panel. draw() reads the real size
 // from `display`; update() has no access to it, so it uses these directly.
-const W = 128, H = 64;
+const W = 128, H = 128;
 
 // ---- hen-in-a-pot sprite, extracted from kura.png: 16x26 cells,
 // 9-color palette (transparent '.' cells are skipped when drawing) ----

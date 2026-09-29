@@ -12,7 +12,7 @@
 
 
 export function setup(params) {
-  const W = 64;
+  const W = 128;
   const H = 128;
   const N = W * H;
 

@@ -46,7 +46,7 @@ export function setup(params) {
 
   // 3x3 소프트 스플랫 잉크 침착
   params.deposit = function (tier, px, py, weight) {
-    if (px < 1 || px >= 62 || py < 1 || py >= 126) return;
+    if (px < 1 || px >= w - 2 || py < 1 || py >= h - 2) return;
     const x0 = px | 0;
     const y0 = py | 0;
     const fx = px - x0;
@@ -75,7 +75,7 @@ export function setup(params) {
       const f1 = 2.0 + tier * 0.5;
       const f2 = 3.0 + 0.035;
       const env = 0.85 + 0.15 * Math.sin(tSim * 0.4 + tier);
-      const px = 31.5 + (22.0 * Math.sin(f1 * tSim) + 8.0 * Math.cos(f2 * tSim + tier)) * env;
+      const px = 63.5 + 1.9 * (22.0 * Math.sin(f1 * tSim) + 8.0 * Math.cos(f2 * tSim + tier)) * env;
       const py = cy + (15.0 * Math.sin(3.0 * tSim + tier * 0.7) + 6.0 * Math.cos(1.5 * tSim)) * env;
       params.deposit(tier, px, py, 0.03);
     }
@@ -120,7 +120,7 @@ export function update(dt, input, params) {
       const pMod = params.t * 0.1 + tier * 1.57 + params.phaseKick;
 
       const env = 0.85 + 0.15 * Math.sin(params.simT * 0.35 + tier * 0.8);
-      const px = 31.5 + (22.0 * Math.sin(f1 * params.simT + pMod) + 8.0 * Math.cos(f2 * params.simT + tier)) * env;
+      const px = 63.5 + 1.9 * (22.0 * Math.sin(f1 * params.simT + pMod) + 8.0 * Math.cos(f2 * params.simT + tier)) * env;
       const py = cy + (15.0 * Math.sin(3.0 * params.simT + tier * 0.7) + 6.0 * Math.cos(1.5 * params.simT)) * env;
 
       if (!Number.isFinite(px) || !Number.isFinite(py)) {

@@ -18,11 +18,11 @@
 export function setup(params) {
   params.time = 0;
   params.spires = [
-    { x: 16, baseY: 127, tipY: 28, seed: 1.2, baseAmp: 5.0, flex: 1.15 },
-    { x: 32, baseY: 127, tipY: 14, seed: 2.8, baseAmp: 6.5, flex: 1.05 },
-    { x: 48, baseY: 127, tipY: 34, seed: 4.5, baseAmp: 4.5, flex: 1.25 },
-    { x: 24, baseY: 127, tipY: 52, seed: 0.7, baseAmp: 3.5, flex: 1.30 },
-    { x: 40, baseY: 127, tipY: 48, seed: 3.3, baseAmp: 3.8, flex: 1.20 }
+    { x: 32, baseY: 127, tipY: 28, seed: 1.2, baseAmp: 5.0, flex: 1.15 },
+    { x: 64, baseY: 127, tipY: 14, seed: 2.8, baseAmp: 6.5, flex: 1.05 },
+    { x: 96, baseY: 127, tipY: 34, seed: 4.5, baseAmp: 4.5, flex: 1.25 },
+    { x: 48, baseY: 127, tipY: 52, seed: 0.7, baseAmp: 3.5, flex: 1.30 },
+    { x: 80, baseY: 127, tipY: 48, seed: 3.3, baseAmp: 3.8, flex: 1.20 }
   ];
 }
 

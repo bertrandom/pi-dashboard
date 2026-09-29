@@ -118,8 +118,11 @@ export function update(dt, input, params) {
     buf[i] *= decay;
   }
 
-  const cx = 31.5;
-  const cy = 63.5;
+  const cx = (W - 1) / 2;
+  const cy = (H - 1) / 2;
+  // Scale relative to the original 64x128 frame so the star keeps its size
+  // on other panels (and comes out round on a square one).
+  const sx = W / 64, sy = H / 128;
   const N = params.N;
   const v = params.v;
 
@@ -132,8 +135,8 @@ export function update(dt, input, params) {
       // N-fold symmetry 매핑
       for (let p = 0; p < petals; p++) {
         const angle = baseAngle + (p * Math.PI * 2.0 / petals) + params.t * 0.2;
-        const px = Math.floor(cx + Math.cos(angle) * radius);
-        const py = Math.floor(cy + Math.sin(angle) * radius * 1.8);
+        const px = Math.floor(cx + Math.cos(angle) * radius * sx);
+        const py = Math.floor(cy + Math.sin(angle) * radius * 1.8 * sy);
 
         if (px >= 1 && px < W - 1 && py >= 1 && py < H - 1) {
           const energy = vVal * gain * 0.35;

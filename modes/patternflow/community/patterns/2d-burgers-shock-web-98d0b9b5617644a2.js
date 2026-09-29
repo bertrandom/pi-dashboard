@@ -12,7 +12,7 @@
 // critical knob = Viscosity, turning it crosses soft diffuse smoke ↔ crystalline converging filigree
 
 export function setup(params) {
-  const W = 64, H = 128, N = W * H;
+  const W = 128, H = 128, N = W * H;
   params.W = W;
   params.H = H;
   params.t = 0;

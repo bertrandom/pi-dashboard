@@ -30,12 +30,12 @@ export function setup(params) {
   params.shock = 1.0;
   params.ampEma = 0.3;
 
-  // 2D accumulation ink buffer (64 x 128)
+  // 2D accumulation ink buffer (w x h)
   params.ink = new Float32Array(w * h);
 
   // 3x3 soft-splat footprint for thick, luminous, non-faint glowing lines
   params.deposit = function (px, py, weight) {
-    if (px < 1 || px >= 62 || py < 1 || py >= 126) return;
+    if (px < 1 || px >= w - 2 || py < 1 || py >= h - 2) return;
     const x0 = px | 0;
     const y0 = py | 0;
     const fx = px - x0;

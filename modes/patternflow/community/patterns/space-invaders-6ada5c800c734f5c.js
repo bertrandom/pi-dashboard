@@ -311,10 +311,12 @@ if (params.invStepT >= params.invStepEvery) {
 }
 export function draw(display, params, time) {
   const W = display.width, H = display.height;
-  const portrait = W < H;
+  // Square panels play upright with the 64-wide playfield centred.
+  const portrait = W <= H;
+  const ox = portrait ? (W - VW) >> 1 : 0;
   const setUV = (u, v, r, g, b) => {
     let x, y;
-    if (portrait) { x = u; y = v; }
+    if (portrait) { x = u + ox; y = v; }
     else { x = W - 1 - v; y = u; }
     if (x >= 0 && x < W && y >= 0 && y < H) {
       if (display.setPixel) display.setPixel(x, y, r|0, g|0, b|0);
@@ -325,7 +327,7 @@ export function draw(display, params, time) {
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       let u, v;
-      if (portrait) { u = x; v = y; }
+      if (portrait) { u = x - ox; v = y; }
       else { u = y; v = W - 1 - x; }
       let r = 2, g = 2, b = 8;
       if ((u * 13 + v * 7) % 47 === 0) { r = 40; g = 40; b = 70; } // stars

@@ -27,7 +27,7 @@ export function setup(params) {
     params.starData = [];
     for (let i = 0; i < 60; i++) {
         params.starData.push({
-            x: Math.random() * 64,
+            x: Math.random() * 128,
             y: Math.random() * 128,
             len: 2 + Math.random() * 6,
             spd: 0.5 + Math.random() * 1.5
@@ -58,7 +58,7 @@ export function update(dt, input, params) {
         s.y += dt * 80.0 * params.speed * s.spd;
         if (s.y > 128) {
             s.y = -s.len;
-            s.x = Math.random() * 64;
+            s.x = Math.random() * 128;
         }
     }
 
@@ -69,7 +69,7 @@ export function update(dt, input, params) {
             p.y += dt * 10.0 * params.speed * p.spd;
             p.x += dt * 5.0 * params.speed * p.driftX;
 
-            if (p.y - p.radius * 2.5 > 128 || p.x < -15 || p.x > 79) {
+            if (p.y - p.radius * 2.5 > 128 || p.x < -15 || p.x > 143) {
                 p.active = false;
             }
         } else {
