@@ -61,3 +61,6 @@ Backups.backupdb
 .MobileBackups.trash
 MobileBackups.trash
 tmbootpicker.efi
+
+# Learned Kinect background (runtime state)
+kinect_background*.npy

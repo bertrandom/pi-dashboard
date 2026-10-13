@@ -45,6 +45,7 @@ from modes.draw import DrawMode
 from modes.gameoflife import GameOfLifeMode
 from modes.github import GitHubMode
 from modes.image import ImageMode
+from modes.kinect import KinectMode
 from modes.library import LibraryMode
 from modes.monitoring import MonitoringMode
 from modes.onair import OnAirMode
@@ -85,6 +86,7 @@ class MatrixController:
         'github': GitHubMode,
         'wheel': WheelMode,
         'monitoring': MonitoringMode,
+        'kinect': KinectMode,
     }
 
     def __init__(self):
@@ -255,7 +257,7 @@ class MatrixController:
             self._set_mode_to_patternflow()
             self._patternflow_next()
         elif key == 'KEY_W':
-            self._toggle_mode_from_patternflow_to_gameoflife()
+            self._toggle_mode_from_patternflow_to_kinect()
 
         elif key == 'KEY_A':
             self._patternflow_knob_delta(0, -1)
@@ -324,10 +326,10 @@ class MatrixController:
         pf = self.modes.get('patternflow')
         pf.web_button(knob_index)
 
-    def _toggle_mode_from_patternflow_to_gameoflife(self):
+    def _toggle_mode_from_patternflow_to_kinect(self):
         if self.get_mode() == 'patternflow':
-            logger.info(f"Keyboard: w → mode gameoflife")
-            self.set_mode('gameoflife')
+            logger.info(f"Keyboard: w → mode kinect")
+            self.set_mode('kinect')
         else:
             logger.info(f"Keyboard: w → mode patternflow")
             self.set_mode('patternflow')

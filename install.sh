@@ -69,6 +69,12 @@ if [ -f "$BOOT_CFG" ] && grep -q "dtparam=audio=on" "$BOOT_CFG"; then
   sed -i 's/dtparam=audio=on/dtparam=audio=off/' "$BOOT_CFG"
 fi
 
+# ── Kinect depth stream (modes/kinect.py) ────────────────────────────────────
+install -m 644 "$INSTALL_DIR/kinect-depth.conf" /etc/modprobe.d/kinect-depth.conf
+if [ "$(cat /sys/module/gspca_kinect/parameters/depth_mode 2>/dev/null)" = N ]; then
+  modprobe -r gspca_kinect && modprobe gspca_kinect || true
+fi
+
 # ── systemd service ───────────────────────────────────────────────────────────
 install -m 644 "$INSTALL_DIR/led-matrix.service" /etc/systemd/system/led-matrix.service
 systemctl daemon-reload

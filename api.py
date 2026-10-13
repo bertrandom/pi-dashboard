@@ -176,7 +176,7 @@ def create_app(get_controller_fn):
         if not c:
             return jsonify(error='controller not ready'), 503
 
-        allowed = {'clock', 'spotify', 'gameoflife', 'text', 'patternflow', 'matrix', 'carousel', 'draw', 'pomodoro', 'reminders', 'night_mode', 'weather', 'workout', 'github', 'wheel', 'monitoring'}
+        allowed = {'clock', 'spotify', 'gameoflife', 'text', 'patternflow', 'matrix', 'carousel', 'draw', 'pomodoro', 'reminders', 'night_mode', 'weather', 'workout', 'github', 'wheel', 'monitoring', 'kinect'}
         if section not in allowed:
             return jsonify(error=f'unknown section: {section}'), 400
 
@@ -567,6 +567,21 @@ def create_app(get_controller_fn):
     @app.route('/spotiup')
     def spotify_callback():
         return handle_spotify_callback()
+
+    # ── Kinect ────────────────────────────────────────────────────────────────
+
+    @app.route('/api/kinect/background', methods=['POST'])
+    def kinect_capture_background():
+        c = ctrl()
+        if not c:
+            return jsonify(error='controller not ready'), 503
+        kinect = c.modes.get('kinect')
+        if not kinect:
+            return jsonify(error='kinect mode not loaded'), 404
+        if c.get_mode() != 'kinect':
+            c.set_mode('kinect')
+        kinect.capture_background()
+        return jsonify(status='ok')
 
     # ── Patternflow ───────────────────────────────────────────────────────────
 

@@ -155,6 +155,21 @@ async function init() {
     document.getElementById('gol-wrap').checked = cfg.gameoflife.wrap !== false;
   }
 
+  // Kinect
+  if (cfg.kinect) {
+    document.getElementById('kinect-style').value = cfg.kinect.style || 'dots';
+    document.getElementById('kinect-palette').value = cfg.kinect.palette || 'synth';
+    document.getElementById('kinect-color-mode').value = cfg.kinect.color_mode || 'scroll';
+    document.getElementById('kinect-backdrop').value = cfg.kinect.backdrop || 'grid';
+    document.getElementById('kinect-led').value = cfg.kinect.led || 'green';
+    document.getElementById('kinect-remove-bg').checked = cfg.kinect.remove_background !== false;
+    KINECT_SLIDERS.forEach(([id, key, def]) => {
+      const v = cfg.kinect[key] ?? def;
+      document.getElementById(id).value = v;
+      document.getElementById(`${id}-val`).textContent = v;
+    });
+  }
+
   // Spotify
   if (cfg.spotify) {
     document.getElementById('sp-client-id').value = cfg.spotify.client_id || '';
@@ -286,7 +301,7 @@ async function setMode(name) {
 }
 
 function showPanelForMode(mode) {
-  ['clock', 'text', 'gameoflife', 'spotify', 'patternflow', 'draw', 'pomodoro', 'workout', 'reminder', 'image', 'library', 'weather', 'github', 'wheel', 'monitoring'].forEach(m => {
+  ['clock', 'text', 'gameoflife', 'spotify', 'patternflow', 'draw', 'pomodoro', 'workout', 'reminder', 'image', 'library', 'weather', 'github', 'wheel', 'monitoring', 'kinect'].forEach(m => {
     const el = document.getElementById(`panel-${m}`);
     if (el) el.style.display = (m === mode) ? '' : 'none';
   });
@@ -613,6 +628,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const gv = document.getElementById('gol-speed-val');
   gs.addEventListener('input', () => gv.textContent = gs.value);
 
+  KINECT_SLIDERS.forEach(([id]) => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => document.getElementById(`${id}-val`).textContent = el.value);
+  });
+
   const as = document.getElementById('sp-artist-speed');
   const av = document.getElementById('sp-artist-speed-val');
   as.addEventListener('input', () => av.textContent = as.value);
@@ -695,6 +715,45 @@ async function saveGol() {
   const data = await api('/api/config/gameoflife', 'POST', { color, speed, wrap });
   if (data.error) { toast(data.error, false); return; }
   toast('Game of Life config saved');
+}
+
+// ── Kinect ────────────────────────────────────────────────────────────────────
+
+const KINECT_SLIDERS = [
+  ['kinect-density', 'density', 32],
+  ['kinect-max-depth', 'max_depth', 4],
+  ['kinect-yaw', 'yaw', 20],
+  ['kinect-pitch', 'pitch', -8],
+  ['kinect-sway', 'sway', 0],
+  ['kinect-glow', 'glow', 0.6],
+  ['kinect-outline', 'outline', 1],
+  ['kinect-dot-size', 'dot_size', 0.6],
+  ['kinect-color-speed', 'color_speed', 0.3],
+  ['kinect-grid-floor', 'grid_floor', 1.2],
+  ['kinect-grid-brightness', 'grid_brightness', 0.6],
+  ['kinect-zoom', 'zoom', 1],
+  ['kinect-smoothing', 'smoothing', 0.5],
+];
+
+async function saveKinect() {
+  const body = {
+    style: document.getElementById('kinect-style').value,
+    palette: document.getElementById('kinect-palette').value,
+    color_mode: document.getElementById('kinect-color-mode').value,
+    backdrop: document.getElementById('kinect-backdrop').value,
+    led: document.getElementById('kinect-led').value,
+    remove_background: document.getElementById('kinect-remove-bg').checked,
+  };
+  KINECT_SLIDERS.forEach(([id, key]) => body[key] = parseFloat(document.getElementById(id).value));
+  const data = await api('/api/config/kinect', 'POST', body);
+  if (data.error) { toast(data.error, false); return; }
+  toast('Kinect config saved');
+}
+
+async function captureKinectBackground() {
+  const data = await api('/api/kinect/background', 'POST', {});
+  if (data.error) { toast(data.error, false); return; }
+  toast('Step out of view — learning background in 5 s');
 }
 
 // ── Spotify ───────────────────────────────────────────────────────────────────

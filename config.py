@@ -126,6 +126,33 @@ DEFAULT_CONFIG = {
     "monitoring": {
         "endpoints": [],
         "scroll_speed": 20
+    },
+    "kinect": {
+        "style": "dots",
+        "palette": "synth",
+        "density": 32,
+        "max_depth": 4.0,
+        "yaw": 20,
+        "pitch": -8,
+        "sway": 0,
+        "sway_speed": 0.1,
+        "bob": 0,
+        "glow": 0.6,
+        "outline": 1.0,
+        "dot_size": 0.6,
+        "remove_background": True,
+        "led": "green",
+        "color_mode": "scroll",
+        "color_speed": 0.3,
+        "color_period": 1.2,
+        "backdrop": "grid",
+        "grid_floor": 1.2,
+        "grid_distance": 8.0,
+        "grid_brightness": 0.6,
+        "zoom": 1.0,
+        "smoothing": 0.5,
+        "edge_jump": 6.0,
+        "device": ""
     }
 }
 

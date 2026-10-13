@@ -138,6 +138,109 @@
     <button onclick="saveGol()">Apply</button>
   </section>
 
+  <!-- Kinect -->
+  <section class="card" id="panel-kinect">
+    <h2>Kinect Wireframe</h2>
+    <label>Style
+      <select id="kinect-style">
+        <option value="dots">Dots (point cloud)</option>
+        <option value="vr">90s VR (shaded polygons)</option>
+        <option value="wire">Glowing wireframe</option>
+        <option value="mesh">Grid mesh</option>
+        <option value="rows">Rows</option>
+        <option value="cols">Columns</option>
+      </select>
+    </label>
+    <label>Palette
+      <select id="kinect-palette">
+        <option value="synth">Synth</option>
+        <option value="cyan">Cyan</option>
+        <option value="green">Green</option>
+        <option value="heat">Heat</option>
+        <option value="white">White</option>
+        <option value="rainbow">Rainbow</option>
+      </select>
+    </label>
+    <label>Colour
+      <select id="kinect-color-mode">
+        <option value="scroll">Scroll top to bottom</option>
+        <option value="depth">By depth</option>
+      </select>
+    </label>
+    <label>Colour speed
+      <input type="range" id="kinect-color-speed" min="0" max="1.5" step="0.05" value="0.3">
+      <span id="kinect-color-speed-val">0.3</span>
+    </label>
+    <label>Density (columns)
+      <input type="range" id="kinect-density" min="10" max="64" value="32">
+      <span id="kinect-density-val">32</span>
+    </label>
+    <label>Max depth (m)
+      <input type="range" id="kinect-max-depth" min="1" max="6" step="0.25" value="4">
+      <span id="kinect-max-depth-val">4</span>
+    </label>
+    <label>Angle (°)
+      <input type="range" id="kinect-yaw" min="-60" max="60" value="20">
+      <span id="kinect-yaw-val">20</span>
+    </label>
+    <label>Tilt (°)
+      <input type="range" id="kinect-pitch" min="-40" max="40" value="-8">
+      <span id="kinect-pitch-val">-8</span>
+    </label>
+    <label>Sway (°)
+      <input type="range" id="kinect-sway" min="0" max="60" value="0">
+      <span id="kinect-sway-val">0</span>
+    </label>
+    <label>Glow
+      <input type="range" id="kinect-glow" min="0" max="2" step="0.1" value="0.6">
+      <span id="kinect-glow-val">0.6</span>
+    </label>
+    <label>Dot size
+      <input type="range" id="kinect-dot-size" min="0.3" max="2" step="0.1" value="0.6">
+      <span id="kinect-dot-size-val">0.6</span>
+    </label>
+    <label>Outline
+      <input type="range" id="kinect-outline" min="0" max="2" step="0.1" value="1">
+      <span id="kinect-outline-val">1</span>
+    </label>
+    <label>Zoom
+      <input type="range" id="kinect-zoom" min="0.5" max="2" step="0.05" value="1">
+      <span id="kinect-zoom-val">1</span>
+    </label>
+    <label>Smoothing
+      <input type="range" id="kinect-smoothing" min="0" max="0.9" step="0.05" value="0.5">
+      <span id="kinect-smoothing-val">0.5</span>
+    </label>
+    <label class="row">
+      <input type="checkbox" id="kinect-remove-bg" checked> Remove background
+    </label>
+    <label>Kinect LED while running
+      <select id="kinect-led">
+        <option value="green">Green</option>
+        <option value="off">Off</option>
+        <option value="red">Red</option>
+        <option value="yellow">Yellow</option>
+      </select>
+    </label>
+    <label>Backdrop
+      <select id="kinect-backdrop">
+        <option value="grid">3D green grid</option>
+        <option value="none">None</option>
+      </select>
+    </label>
+    <label>Grid floor (m below Kinect)
+      <input type="range" id="kinect-grid-floor" min="0.3" max="2.5" step="0.05" value="1.2">
+      <span id="kinect-grid-floor-val">1.2</span>
+    </label>
+    <label>Grid brightness
+      <input type="range" id="kinect-grid-brightness" min="0.1" max="1.5" step="0.05" value="0.6">
+      <span id="kinect-grid-brightness-val">0.6</span>
+    </label>
+    <button onclick="saveKinect()">Apply</button>
+    <button onclick="captureKinectBackground()">Capture background</button>
+    <p class="hint">Capture background counts down 5 s so you can step out of view, then learns the empty room.</p>
+  </section>
+
   <!-- Spotify -->
   <section class="card" id="panel-spotify">
     <h2>Spotify</h2>
@@ -609,6 +712,6 @@
 </div>
 
 <div id="toast"></div>
-<script src="/static/app.js?v=20260729-monitoring"></script>
+<script src="/static/app.js?v=20261013-kinect-led"></script>
 </body>
 </html>

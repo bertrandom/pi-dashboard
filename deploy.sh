@@ -29,6 +29,7 @@ EXCLUDES=(
   --exclude 'static/library/'
   --exclude 'static/matrix_image.png'
   --exclude 'static/matrix_image.gif'
+  --exclude 'kinect_background*.npy'
 )
 
 DRY_RUN=0
@@ -52,6 +53,12 @@ ssh -t "$REMOTE" "
   set -e
   sudo rsync -a --chown=root:root $REMOTE_EXCLUDES '$STAGING_DIR/' '$INSTALL_DIR/'
   sudo chmod +x '$INSTALL_DIR/wait-for-network.sh'
+  sudo install -m 644 '$INSTALL_DIR/kinect-depth.conf' /etc/modprobe.d/kinect-depth.conf
+  if [ \"\$(cat /sys/module/gspca_kinect/parameters/depth_mode 2>/dev/null)\" = N ]; then
+    echo '==> Reloading gspca_kinect in depth mode'
+    sudo systemctl stop '$SERVICE'
+    sudo modprobe -r gspca_kinect && sudo modprobe gspca_kinect
+  fi
   sudo systemctl restart '$SERVICE'
   sleep 2
   systemctl --no-pager --lines=0 status '$SERVICE' || true
