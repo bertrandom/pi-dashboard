@@ -91,4 +91,7 @@ class ClockMode(BaseMode):
             draw.rectangle([28, sy + 6, 29, sy + 7], fill=dot_color)
             draw.rectangle([28, sy + 14, 29, sy + 15], fill=dot_color)
 
-        image_to_canvas(canvas, img)
+        # Centre the 64x32 clock on the 128x128 panel.
+        panel = Image.new('RGB', (128, 128), (0, 0, 0))
+        panel.paste(img, ((128 - 64) // 2, (128 - 32) // 2))
+        image_to_canvas(canvas, panel)
