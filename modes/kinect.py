@@ -609,11 +609,14 @@ class KinectMode(BaseMode):
 
     GRID_COLOR = np.array([30, 255, 80], dtype=np.float32)
     GRID_STEP = 0.5     # metres between grid lines
-    GRID_HALF_W = 6.0   # grid spans ±this many metres sideways
-    GRID_WALL_H = 5.0
+    # Big enough that no edge of the floor or wall is ever on screen, at any
+    # view angle or sway, so the grid reads as endless.
+    GRID_HALF_W = 30.0
+    GRID_WALL_H = 20.0
+    NEAR = 0.3          # near clip plane, metres
 
     def _grid_segments(self, floor, wall_z):
-        """World-space line pieces for a floor grid and back-wall grid."""
+        """World-space endpoints of the floor-grid and back-wall-grid lines."""
         key = (floor, wall_z)
         if getattr(self, '_grid_key', None) == key:
             return self._grid_cache
@@ -621,7 +624,7 @@ class KinectMode(BaseMode):
         lines = []
         xs = np.arange(-hw, hw + 1e-6, step)
         for x in xs:                                            # floor, receding
-            lines.append(((x, floor, 0.3), (x, floor, wall_z)))
+            lines.append(((x, floor, 0.0), (x, floor, wall_z)))
         for z in np.arange(step, wall_z + 1e-6, step):          # floor, across
             lines.append(((-hw, floor, z), (hw, floor, z)))
         top = floor - self.GRID_WALL_H
@@ -629,20 +632,9 @@ class KinectMode(BaseMode):
             lines.append(((x, floor, wall_z), (x, top, wall_z)))
         for y in np.arange(floor, top - 1e-6, -step):           # wall, horizontal
             lines.append(((-hw, y, wall_z), (hw, y, wall_z)))
-
-        # Cut into short pieces so lines that pass behind the camera after
-        # the view rotation can be dropped piecewise.
-        p0, p1 = [], []
-        for a, b in lines:
-            a, b = np.array(a), np.array(b)
-            n = max(1, int(np.ceil(np.linalg.norm(b - a) / 0.25)))
-            t = np.linspace(0, 1, n + 1)[:, None]
-            pts = a + (b - a) * t
-            p0.append(pts[:-1])
-            p1.append(pts[1:])
+        p = np.array(lines, dtype=np.float32)
         self._grid_key = key
-        self._grid_cache = (np.concatenate(p0).astype(np.float32),
-                            np.concatenate(p1).astype(np.float32))
+        self._grid_cache = (p[:, 0], p[:, 1])
         return self._grid_cache
 
     def _render_grid(self, cfg, t):
@@ -671,19 +663,51 @@ class KinectMode(BaseMode):
         floor = float(cfg.get('grid_floor', 1.2))
         wall_z = float(cfg.get('grid_distance', 8.0))
         p0, p1 = self._grid_segments(floor, wall_z)
-        _, _, z0, sx0, sy0 = self._view(p0[:, 0], p0[:, 1], p0[:, 2], cfg, t)
-        _, _, z1, sx1, sy1 = self._view(p1[:, 0], p1[:, 1], p1[:, 2], cfg, t)
-        ok = (z0 > 0.3) & (z1 > 0.3)
-        if not ok.any():
+        x0, y0, z0, _, _ = self._view(p0[:, 0], p0[:, 1], p0[:, 2], cfg, t)
+        x1, y1, z1, _, _ = self._view(p1[:, 0], p1[:, 1], p1[:, 2], cfg, t)
+
+        # Clip against the near plane: drop lines entirely behind the camera
+        # and pull the far end of half-visible ones up to the plane.
+        keep = (z0 > self.NEAR) | (z1 > self.NEAR)
+        x0, y0, z0, x1, y1, z1 = (a[keep] for a in (x0, y0, z0, x1, y1, z1))
+        behind0, behind1 = z0 < self.NEAR, z1 < self.NEAR
+        with np.errstate(invalid='ignore', divide='ignore'):
+            tn = (self.NEAR - z0) / (z1 - z0)
+            cut = [a + (b - a) * tn for a, b in ((x0, x1), (y0, y1), (z0, z1))]
+        x0, y0, z0 = (np.where(behind0, c, a) for c, a in zip(cut, (x0, y0, z0)))
+        x1, y1, z1 = (np.where(behind1, c, b) for c, b in zip(cut, (x1, y1, z1)))
+
+        f = float(cfg.get('zoom', 1.0)) * H / CAM_H * FY
+        sx0, sy0 = W / 2 + f * x0 / z0, H / 2 + f * y0 / z0
+        sx1, sy1 = W / 2 + f * x1 / z1, H / 2 + f * y1 / z1
+
+        # Trim to the screen (Liang-Barsky) so huge lines cost only what's
+        # visible. Depth is interpolated as 1/z, which is linear on screen.
+        dx, dy = sx1 - sx0, sy1 - sy0
+        ta, tb = np.zeros_like(dx), np.ones_like(dx)
+        keep = np.ones(len(dx), dtype=bool)
+        for p, q in ((-dx, sx0 + 1), (dx, W - sx0), (-dy, sy0 + 1), (dy, H - sy0)):
+            with np.errstate(invalid='ignore', divide='ignore'):
+                r = q / p
+            keep &= ~((p == 0) & (q < 0))
+            ta = np.where(p < 0, np.maximum(ta, r), ta)
+            tb = np.where(p > 0, np.minimum(tb, r), tb)
+        keep &= ta <= tb
+        if not keep.any():
             return np.zeros((H, W, 3), dtype=np.float32)
-        z0, z1 = z0[ok], z1[ok]
-        s0 = np.stack([sx0[ok], sy0[ok]], axis=1)
-        s1 = np.stack([sx1[ok], sy1[ok]], axis=1)
-        # Fog: lines fade with distance.
-        fog0 = np.clip(1.15 - z0 / (wall_z + 1.0), 0.12, 1.0) * 255
-        fog1 = np.clip(1.15 - z1 / (wall_z + 1.0), 0.12, 1.0) * 255
-        inten, lvl = self._draw_aa_lines(s0, s1, z0, z1, fog0, fog1,
-                                         np.full(H * W, np.inf, dtype=np.float32))
+        sx0, sy0, dx, dy, ta, tb = (a[keep] for a in (sx0, sy0, dx, dy, ta, tb))
+        iz0, iz1 = 1 / z0[keep], 1 / z1[keep]
+        s0 = np.stack([sx0 + dx * ta, sy0 + dy * ta], axis=1)
+        s1 = np.stack([sx0 + dx * tb, sy0 + dy * tb], axis=1)
+        za = 1 / (iz0 + (iz1 - iz0) * ta)
+        zb = 1 / (iz0 + (iz1 - iz0) * tb)
+
+        # Fog: lines fade with distance, so the grid dissolves rather than ends.
+        fog0 = np.clip(1.15 - za / (wall_z + 1.0), 0.08, 1.0) * 255
+        fog1 = np.clip(1.15 - zb / (wall_z + 1.0), 0.08, 1.0) * 255
+        inten, lvl = self._draw_aa_lines(s0, s1, za, zb, fog0, fog1,
+                                         np.full(H * W, np.inf, dtype=np.float32),
+                                         max_samples=400)
         brightness = np.where(inten > 1e-3, lvl / np.maximum(inten, 1e-3), 0) / 255
         level = float(cfg.get('grid_brightness', 0.6))
         img = self.GRID_COLOR * (np.minimum(inten, 1.2) * brightness * level)[:, :, None]
@@ -927,7 +951,7 @@ class KinectMode(BaseMode):
         np.minimum.at(zkey, y[row] * W + x, key[tri[row]])
 
     @staticmethod
-    def _draw_aa_lines(p0, p1, z0, z1, s0, s1, zbuf):
+    def _draw_aa_lines(p0, p1, z0, z1, s0, s1, zbuf, max_samples=80):
         """Antialiased lines (bilinear splats) with a z-test.
 
         Returns per-pixel (intensity, intensity-weighted shade) buffers, each
@@ -935,7 +959,7 @@ class KinectMode(BaseMode):
         """
         p0, p1 = p0.astype(np.float32), p1.astype(np.float32)
         length = np.hypot(*(p1 - p0).T)
-        n = np.clip(np.ceil(length / 0.75), 1, 80).astype(np.int64) + 1
+        n = np.clip(np.ceil(length / 0.75), 1, max_samples).astype(np.int64) + 1
         seg = np.repeat(np.arange(len(n)), n)
         t = ((np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)) / (n[seg] - 1)).astype(np.float32)
 
