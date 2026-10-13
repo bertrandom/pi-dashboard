@@ -180,16 +180,16 @@
       <span id="kinect-max-depth-val">4</span>
     </label>
     <label>Angle (°)
-      <input type="range" id="kinect-yaw" min="-60" max="60" value="20">
-      <span id="kinect-yaw-val">20</span>
+      <input type="range" id="kinect-yaw" min="-60" max="60" value="0">
+      <span id="kinect-yaw-val">0</span>
     </label>
     <label>Tilt (°)
       <input type="range" id="kinect-pitch" min="-40" max="40" value="-8">
       <span id="kinect-pitch-val">-8</span>
     </label>
     <label>Sway (°)
-      <input type="range" id="kinect-sway" min="0" max="60" value="0">
-      <span id="kinect-sway-val">0</span>
+      <input type="range" id="kinect-sway" min="0" max="60" value="20">
+      <span id="kinect-sway-val">20</span>
     </label>
     <label>Glow
       <input type="range" id="kinect-glow" min="0" max="2" step="0.1" value="0.6">
@@ -210,6 +210,14 @@
     <label>Smoothing
       <input type="range" id="kinect-smoothing" min="0" max="0.9" step="0.05" value="0.5">
       <span id="kinect-smoothing-val">0.5</span>
+    </label>
+    <label>Trails
+      <input type="range" id="kinect-trails" min="0" max="1" step="0.05" value="0.6">
+      <span id="kinect-trails-val">0.6</span>
+    </label>
+    <label>Trail length (s)
+      <input type="range" id="kinect-trail-length" min="0.2" max="3" step="0.1" value="1">
+      <span id="kinect-trail-length-val">1</span>
     </label>
     <label class="row">
       <input type="checkbox" id="kinect-remove-bg" checked> Remove background
@@ -712,6 +720,6 @@
 </div>
 
 <div id="toast"></div>
-<script src="/static/app.js?v=20261013-kinect-led"></script>
+<script src="/static/app.js?v=20261013-kinect-trails"></script>
 </body>
 </html>

@@ -102,6 +102,23 @@ class KinectTests(unittest.TestCase):
         rows = a.sum(axis=1)
         self.assertGreater(len({tuple(r) for r in rows[rows.sum(axis=1) > 0]}), 5)
 
+    def test_trails_follow_movement_but_not_a_still_subject(self):
+        depth = np.full((48, 64), np.nan, dtype=np.float32)
+        depth[10:40, 40:50] = 2.0
+        cfg = {'backdrop': 'none', 'glow': 0, 'sway': 0, 'bob': 0, 'yaw': 0, 'pitch': 0}
+
+        def lit_after(moving, trails):
+            mode = KinectMode(_Config())
+            mode._pivot = 2.0
+            for i in range(20):
+                shift = -i if moving else 0
+                frame = mode.render_frame(np.roll(depth, shift, axis=1),
+                                          dict(cfg, trails=trails), t=10 + i / 30)
+            return (frame.sum(axis=2) > 0).sum()
+
+        self.assertGreater(lit_after(True, 0.6), 1.5 * lit_after(True, 0))
+        self.assertLess(lit_after(False, 0.6), 1.1 * lit_after(False, 0))
+
     def test_render_frame_handles_empty_depth(self):
         mode = KinectMode(_Config())
         depth = np.full((30, 40), np.nan, dtype=np.float32)

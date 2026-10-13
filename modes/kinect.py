@@ -5,6 +5,7 @@ driver (loaded with ``depth_mode=1``, see kinect-depth.conf) and renders it
 as a slowly swaying 3D wireframe mesh.
 """
 
+import collections
 import colorsys
 import ctypes
 import fcntl
@@ -347,6 +348,7 @@ class KinectMode(BaseMode):
         self._last_cfg_load = 0.0
         self._pivot = 2.0
         self._background = _Background()
+        self._trail = collections.deque()   # (time, points xyz, shade, fade)
         set_led('off')      # stop the power-on blinking until the mode runs
 
     def capture_background(self):
@@ -356,6 +358,7 @@ class KinectMode(BaseMode):
     def start(self):
         super().start()
         self._last_cfg_load = 0.0
+        self._trail.clear()
         set_led(self._get_cfg().get('led', 'green'))
         with self._lock:
             self._depth = None
@@ -541,12 +544,8 @@ class KinectMode(BaseMode):
         bh, bw = CAM_H // gh, CAM_W // gw   # matches _downsample's blocks
         max_depth = float(cfg.get('max_depth', 4.0))
 
-        # Back-project grid cell centres to camera space.
-        u = (np.arange(gw) + 0.5) * bw
-        v = (np.arange(gh) + 0.5) * bh
+        x, y = self._backproject(depth)
         z = depth
-        x = (u[None, :] - CX) * z / FX
-        y = (v[:, None] - CY) * z / FY
 
         valid = ~np.isnan(z)
         if update_pivot and valid.any():
@@ -581,11 +580,20 @@ class KinectMode(BaseMode):
         slower nod around that angle.
         """
         speed = float(cfg.get('sway_speed', 0.1))
-        a = math.radians(float(cfg.get('yaw', 20))
-                         + float(cfg.get('sway', 0)) * math.sin(2 * math.pi * speed * t))
+        a = math.radians(float(cfg.get('yaw', 0))
+                         + float(cfg.get('sway', 20)) * math.sin(2 * math.pi * speed * t))
         b = math.radians(float(cfg.get('pitch', -8))
-                         + float(cfg.get('bob', 0)) * math.sin(2 * math.pi * speed * 0.63 * t))
+                         + float(cfg.get('bob', 6)) * math.sin(2 * math.pi * speed * 0.63 * t))
         return a, b
+
+    @staticmethod
+    def _backproject(depth):
+        """Camera-space x, y (metres) of each grid cell centre."""
+        gh, gw = depth.shape
+        bh, bw = CAM_H // gh, CAM_W // gw   # matches _downsample's blocks
+        u = (np.arange(gw) + 0.5) * bw
+        v = (np.arange(gh) + 0.5) * bh
+        return (u[None, :] - CX) * depth / FX, (v[:, None] - CY) * depth / FY
 
     def _view(self, x, y, z, cfg, t):
         """Camera-space points → orbited points and screen coordinates."""
@@ -816,51 +824,112 @@ class KinectMode(BaseMode):
         return np.clip(out, 0, 255).astype(np.uint8)
 
     def _render_dots(self, depth, cfg, t):
-        """Point cloud: one antialiased dot per depth sample."""
+        """Point cloud: one antialiased dot per depth sample, plus motion trails."""
         lut = PALETTES.get(cfg.get('palette', 'synth'), PALETTES['synth']).astype(np.float32)
         _, _, zr, sx, sy, valid, shade, _ = self._project(depth, cfg, t)
         # Fade dots out over the last half metre before max_depth so things
         # hovering at the cutoff dim rather than pop.
         max_depth = float(cfg.get('max_depth', 4.0))
-        fade = np.clip((max_depth - depth[valid]) / 0.5, 0, 1).astype(np.float32)
-        if cfg.get('color_mode', 'scroll') == 'scroll':
-            # Colour no longer encodes depth, so keep a gentle brightness cue.
-            near = np.clip((max_depth - depth[valid]) / (max_depth - MIN_DEPTH), 0, 1)
-            fade *= (0.55 + 0.45 * near).astype(np.float32)
-        sx, sy, zr, shade = sx[valid], sy[valid], zr[valid], shade[valid]
+        with np.errstate(invalid='ignore'):
+            fade = np.clip((max_depth - depth) / 0.5, 0, 1).astype(np.float32)
+            if cfg.get('color_mode', 'scroll') == 'scroll':
+                # Colour no longer encodes depth, so keep a gentle brightness cue.
+                near = np.clip((max_depth - depth) / (max_depth - MIN_DEPTH), 0, 1)
+                fade *= (0.55 + 0.45 * near).astype(np.float32)
+        trail = self._trail_layer(depth, valid, shade, fade, cfg, t, lut)
+
+        sx, sy, zr = sx[valid], sy[valid], zr[valid]
+        shade, fade = shade[valid], fade[valid]
         if not len(sx):
-            return np.zeros((H, W, 3), dtype=np.uint8)
+            if trail is None:
+                return np.zeros((H, W, 3), dtype=np.uint8)
+            return np.clip(self._with_glow(trail, cfg), 0, 255).astype(np.uint8)
 
         # Perspective dot size: each dot is four sub-dots spread further
         # apart the nearer it is (they coincide for distant dots).
         size = np.clip(float(cfg.get('dot_size', 0.6)) * self._pivot / zr, 0.6, 3.0)
         r = (0.3 * (size - 0.6)).astype(np.float32)
-        fx = np.concatenate([sx - r, sx + r, sx - r, sx + r]).astype(np.float32)
-        fy = np.concatenate([sy - r, sy - r, sy + r, sy + r]).astype(np.float32)
-        level = np.tile(shade, 4).astype(np.int32)
-        fade = np.tile(fade, 4)
+        inten, lvl = self._splat(
+            np.concatenate([sx - r, sx + r, sx - r, sx + r]),
+            np.concatenate([sy - r, sy - r, sy + r, sy + r]),
+            np.tile(shade, 4), np.tile(fade, 4))
+        dots = lut[lvl] * np.minimum(inten, 1.0)[:, :, None]
+        if trail is not None:
+            # Trails sit underneath the live dots.
+            dots += trail * (1 - np.minimum(inten * 1.5, 1.0))[:, :, None]
+        return np.clip(self._with_glow(dots, cfg), 0, 255).astype(np.uint8)
 
+    TRAIL_INTERVAL = 0.08   # seconds between trail snapshots
+    _trail_stride = 1       # keep every Nth row/column in trail snapshots
+
+    def _trail_layer(self, depth, valid, shade, fade, cfg, t, lut):
+        """Fading ghosts of where the subject was over the last trail_length s.
+
+        Snapshots are kept in camera space and re-projected through the
+        current view, so a subject standing still leaves no trail even
+        while the camera sways. Returns float RGB, or None.
+        """
+        strength = float(cfg.get('trails', 0.6))
+        length = max(0.1, float(cfg.get('trail_length', 1.0)))
+        if strength <= 0 or (self._trail and t < self._trail[-1][0]):
+            self._trail.clear()
+            if strength <= 0:
+                return None
+        while self._trail and t - self._trail[0][0] > length:
+            self._trail.popleft()
+
+        if not self._trail or t - self._trail[-1][0] >= self.TRAIL_INTERVAL:
+            # Every other row and column is plenty for a ghost.
+            m = valid.copy()
+            stride = self._trail_stride
+            if stride > 1:
+                keep = np.zeros_like(m)
+                keep[::stride, ::stride] = True
+                m &= keep
+            x, y = self._backproject(depth)
+            pts = np.stack([x[m], y[m], depth[m]], axis=1).astype(np.float32)
+            self._trail.append((t, pts, shade[m], fade[m]))
+
+        ghosts = [e for e in self._trail if t - e[0] >= self.TRAIL_INTERVAL / 2]
+        if not ghosts:
+            return None
+        pts = np.concatenate([e[1] for e in ghosts])
+        if not len(pts):
+            return None
+        age = np.concatenate([np.full(len(e[1]), (t - e[0]) / length, dtype=np.float32)
+                              for e in ghosts])
+        g_shade = np.concatenate([e[2] for e in ghosts])
+        g_fade = np.concatenate([e[3] for e in ghosts])
+
+        _, _, zr, sx, sy = self._view(pts[:, 0], pts[:, 1], pts[:, 2], cfg, t)
+        ok = zr > 0.1
+        w = strength * (1 - np.clip(age, 0, 1)) ** 1.5 * g_fade
+        inten, lvl = self._splat(sx[ok], sy[ok], g_shade[ok], w[ok])
+        return lut[lvl] * np.minimum(inten, 1.0)[:, :, None]
+
+    @staticmethod
+    def _splat(fx, fy, level, weight):
+        """Bilinear-splat points; returns per-pixel (intensity, nearest level)."""
+        fx, fy = fx.astype(np.float32), fy.astype(np.float32)
         ix, iy = np.floor(fx).astype(np.int32), np.floor(fy).astype(np.int32)
         keep = (ix >= -1) & (ix < W) & (iy >= -1) & (iy < H)
-        fx, fy, ix, iy, level, fade = fx[keep], fy[keep], ix[keep], iy[keep], level[keep], fade[keep]
+        fx, fy, ix, iy = fx[keep], fy[keep], ix[keep], iy[keep]
+        level, weight = level[keep].astype(np.int32), weight[keep]
         ax, ay = fx - ix, fy - iy
 
-        # Bilinear splat into a buffer padded by one pixel on every side.
+        # Splat into a buffer padded by one pixel on every side.
         PW = W + 2
         base = (iy + 1) * PW + (ix + 1)
         pix = np.concatenate([base, base + 1, base + PW, base + PW + 1])
         w = np.concatenate([(1 - ax) * (1 - ay), ax * (1 - ay), (1 - ax) * ay, ax * ay])
-        w *= np.tile(fade, 4)
-        size_ = (H + 2) * PW
-        inten = np.bincount(pix, weights=w, minlength=size_)
-        # Where dots overlap, the nearest one sets the colour.
-        lvl = np.zeros(size_, dtype=np.int32)
+        w *= np.tile(weight, 4)
+        size = (H + 2) * PW
+        inten = np.bincount(pix, weights=w, minlength=size)
+        # Where points overlap, the highest level (nearest/brightest) wins.
+        lvl = np.zeros(size, dtype=np.int32)
         np.maximum.at(lvl, pix[w > 0.05], np.tile(level, 4)[w > 0.05])
-        inten = inten.reshape(H + 2, PW)[1:-1, 1:-1]
-        lvl = lvl.reshape(H + 2, PW)[1:-1, 1:-1]
-
-        dots = lut[lvl] * np.minimum(inten, 1.0)[:, :, None]
-        return np.clip(self._with_glow(dots, cfg), 0, 255).astype(np.uint8)
+        return (inten.reshape(H + 2, PW)[1:-1, 1:-1],
+                lvl.reshape(H + 2, PW)[1:-1, 1:-1])
 
     @staticmethod
     def _with_glow(img, cfg):
